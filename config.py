@@ -9,6 +9,7 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 SESSIONS_FILE = CONFIG_DIR / "sessions.json"
 HISTORY_DIR = CONFIG_DIR / "history"
 LOG_DIR = CONFIG_DIR / "logs"
+UPLOADS_DIR = CONFIG_DIR / "uploads"
 
 DEFAULT_PORT = 8080
 DEFAULT_HOST = "0.0.0.0"
@@ -19,6 +20,7 @@ def _ensure_dirs():
     CONFIG_DIR.mkdir(exist_ok=True)
     HISTORY_DIR.mkdir(exist_ok=True)
     LOG_DIR.mkdir(exist_ok=True)
+    UPLOADS_DIR.mkdir(exist_ok=True)
 
 
 def load_config() -> dict:

@@ -65,6 +65,12 @@ class SessionManager:
             conv.last_message_at = _iso_now()
             self._save()
 
+    def rename_conversation(self, conversation_id: str, new_name: str):
+        conv = self._conversations.get(conversation_id)
+        if conv:
+            conv.name = new_name
+            self._save()
+
     def delete_conversation(self, conversation_id: str) -> bool:
         if conversation_id in self._conversations:
             del self._conversations[conversation_id]
