@@ -208,6 +208,11 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
         "--allowedTools", "Read,Write,Edit,Bash,Glob,Grep",
         "--max-turns", "50",
         "--verbose",
+        "--append-system-prompt",
+        "The user is communicating with you remotely via ClaudeRemote, "
+        "an Android app that connects to this machine over the local network. "
+        "They cannot see your full terminal output or interact with files directly. "
+        "Keep responses concise and focused on actionable results.",
     ]
 
     if session_id:
