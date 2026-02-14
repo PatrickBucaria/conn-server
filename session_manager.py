@@ -1,4 +1,5 @@
 """Conversation tracking, session IDs, and message history."""
+from __future__ import annotations
 
 import json
 import time

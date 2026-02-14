@@ -1,4 +1,5 @@
 """FastAPI bridge server — WebSocket endpoint wrapping claude -p subprocess."""
+from __future__ import annotations
 
 import asyncio
 import json
@@ -216,11 +217,12 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
 
         new_session_id = session_id
 
+        client_gone = False
+
         async for line in active_process.stdout:
-            if websocket.client_state != WebSocketState.CONNECTED:
-                logger.info("Client disconnected during streaming — process continues")
-                # Don't kill — let Claude finish so session state is preserved
-                break
+            if not client_gone and websocket.client_state != WebSocketState.CONNECTED:
+                logger.info("Client disconnected during streaming — continuing to capture response")
+                client_gone = True
 
             line = line.decode().strip()
             if not line:
@@ -231,9 +233,22 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
             except json.JSONDecodeError:
                 continue
 
-            forwarded = await _forward_event(websocket, event, conversation_id)
-            if forwarded and forwarded.get("type") == "text_delta":
-                accumulated_text += forwarded.get("text", "")
+            # Always capture text and session ID, even after client disconnect
+            if not client_gone:
+                forwarded = await _forward_event(websocket, event, conversation_id)
+                if forwarded and forwarded.get("type") == "text_delta":
+                    accumulated_text += forwarded.get("text", "")
+            else:
+                # Client gone — still accumulate text from events
+                event_type = event.get("type")
+                if event_type == "content_block_delta":
+                    delta = event.get("delta", {})
+                    if delta.get("type") == "text_delta":
+                        accumulated_text += delta.get("text", "")
+                elif event_type == "assistant" and "message" in event:
+                    for block in event["message"].get("content", []):
+                        if block.get("type") == "text":
+                            accumulated_text += block["text"]
 
             # Capture session ID from result events
             if event.get("type") == "result":
@@ -350,8 +365,12 @@ def _summarize_tool_input(tool_name: str | None, input_data: dict) -> str:
 
 async def _send(websocket: WebSocket, data: dict):
     """Send JSON to WebSocket if still connected."""
-    if websocket.client_state == WebSocketState.CONNECTED:
+    if websocket.client_state != WebSocketState.CONNECTED:
+        return
+    try:
         await websocket.send_json(data)
+    except (WebSocketDisconnect, RuntimeError):
+        pass
 
 
 if __name__ == "__main__":
