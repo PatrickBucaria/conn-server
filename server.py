@@ -16,7 +16,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Header, HTTPExcepti
 from starlette.websockets import WebSocketState
 
 from auth import verify_token
-from config import load_config, get_working_dir, UPLOADS_DIR
+from config import load_config, get_working_dir, UPLOADS_DIR, LOG_DIR
 from session_manager import SessionManager
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -131,6 +131,67 @@ async def restart_server(authorization: str = Header(None)):
     asyncio.create_task(_exit())
 
     return {"status": "restarting"}
+
+
+# Global deploy state
+deploy_process: asyncio.subprocess.Process | None = None
+
+
+@app.post("/deploy")
+async def deploy_build(authorization: str = Header(None)):
+    """Trigger a build and deploy to Firebase App Distribution.
+    Runs the build script as a background process and returns immediately."""
+    global deploy_process
+    _verify_rest_auth(authorization)
+
+    if deploy_process and deploy_process.returncode is None:
+        raise HTTPException(status_code=409, detail="Deploy already in progress")
+
+    script = Path.home() / "Projects" / "ClaudeRemote" / "scripts" / "build-and-distribute-android.sh"
+    if not script.exists():
+        raise HTTPException(status_code=500, detail="Build script not found")
+
+    log_file = LOG_DIR / f"deploy-{int(time.time())}.log"
+
+    logger.info(f"Deploy triggered — logging to {log_file}")
+
+    with open(log_file, "w") as f:
+        deploy_process = await asyncio.create_subprocess_exec(
+            str(script), "clauderemote", "Deployed from ClaudeRemote app",
+            stdout=f,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=str(script.parent.parent),
+        )
+
+    asyncio.create_task(_wait_deploy(deploy_process, log_file))
+
+    return {"status": "deploying", "log_file": str(log_file)}
+
+
+@app.get("/deploy/status")
+async def deploy_status(authorization: str = Header(None)):
+    """Check the status of the current or last deploy."""
+    _verify_rest_auth(authorization)
+
+    if deploy_process is None:
+        return {"status": "idle"}
+
+    if deploy_process.returncode is None:
+        return {"status": "in_progress"}
+
+    return {
+        "status": "success" if deploy_process.returncode == 0 else "failed",
+        "exit_code": deploy_process.returncode,
+    }
+
+
+async def _wait_deploy(proc: asyncio.subprocess.Process, log_file: Path):
+    """Wait for deploy to complete and log the result."""
+    await proc.wait()
+    if proc.returncode == 0:
+        logger.info(f"Deploy succeeded (log: {log_file})")
+    else:
+        logger.error(f"Deploy failed with exit code {proc.returncode} (log: {log_file})")
 
 
 def _verify_rest_auth(authorization: str | None):
