@@ -117,7 +117,7 @@ async def ws_chat(websocket: WebSocket):
             else:
                 await _send(websocket, {"type": "error", "detail": f"Unknown message type: {msg_type}"})
 
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, RuntimeError):
         logger.info("Client disconnected")
     except Exception as e:
         logger.exception(f"WebSocket error: {e}")
@@ -133,8 +133,15 @@ async def _handle_message(websocket: WebSocket, msg: dict):
         return
 
     if claude_lock.locked():
-        await _send(websocket, {"type": "busy", "detail": "Another query is running"})
-        return
+        logger.info("Lock held — cancelling previous process for new message")
+        await _cancel_active_process()
+        # Wait briefly for the lock to release
+        try:
+            await asyncio.wait_for(claude_lock.acquire(), timeout=5.0)
+            claude_lock.release()
+        except asyncio.TimeoutError:
+            await _send(websocket, {"type": "busy", "detail": "Another query is still finishing"})
+            return
 
     # Look up session_id from conversation if not provided
     if not session_id and conversation_id:
@@ -170,15 +177,22 @@ async def _handle_new_conversation(websocket: WebSocket, msg: dict):
     })
 
 
-async def _handle_cancel(websocket: WebSocket):
+async def _cancel_active_process():
+    """Terminate the active claude subprocess if one is running."""
     global active_process
     if active_process and active_process.returncode is None:
-        logger.info("Cancelling active claude process")
+        logger.info("Terminating active claude process")
         active_process.terminate()
         try:
             await asyncio.wait_for(active_process.wait(), timeout=5.0)
         except asyncio.TimeoutError:
             active_process.kill()
+        return True
+    return False
+
+
+async def _handle_cancel(websocket: WebSocket):
+    if await _cancel_active_process():
         await _send(websocket, {"type": "cancelled"})
     else:
         await _send(websocket, {"type": "error", "detail": "No active process to cancel"})
