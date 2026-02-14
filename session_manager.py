@@ -16,6 +16,7 @@ class Conversation:
     claude_session_id: str | None = None
     created_at: str = ""
     last_message_at: str = ""
+    working_dir: str | None = None
 
 
 class SessionManager:
@@ -43,13 +44,14 @@ class SessionManager:
             reverse=True,
         )
 
-    def create_conversation(self, conversation_id: str, name: str) -> Conversation:
+    def create_conversation(self, conversation_id: str, name: str, working_dir: str | None = None) -> Conversation:
         now = _iso_now()
         conv = Conversation(
             id=conversation_id,
             name=name,
             created_at=now,
             last_message_at=now,
+            working_dir=working_dir,
         )
         self._conversations[conversation_id] = conv
         self._save()

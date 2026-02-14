@@ -16,7 +16,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Header, HTTPExcepti
 from starlette.websockets import WebSocketState
 
 from auth import verify_token
-from config import load_config, get_working_dir, UPLOADS_DIR, LOG_DIR
+from config import load_config, get_working_dir, UPLOADS_DIR, LOG_DIR, WORKING_DIR
 from session_manager import SessionManager
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -109,6 +109,20 @@ async def upload_image(
 
     logger.info(f"Uploaded {len(content)} bytes to {dest}")
     return {"path": str(dest)}
+
+
+@app.get("/projects")
+async def list_projects(authorization: str = Header(None)):
+    """List subdirectories of the projects root as available project contexts."""
+    _verify_rest_auth(authorization)
+    projects_root = Path(get_working_dir())
+    if not projects_root.is_dir():
+        return {"projects": []}
+    projects = []
+    for entry in sorted(projects_root.iterdir()):
+        if entry.is_dir() and not entry.name.startswith("."):
+            projects.append({"name": entry.name, "path": str(entry)})
+    return {"projects": projects}
 
 
 @app.post("/restart")
@@ -287,12 +301,14 @@ async def _handle_message(websocket: WebSocket, msg: dict):
             await _send(websocket, {"type": "busy", "detail": "Another query is still finishing"})
             return
 
-    # Look up session_id from conversation if not provided
+    # Look up session_id and working_dir from conversation if not provided
     is_first_turn = False
+    conv_working_dir = None
     if not session_id and conversation_id:
         conv = sessions.get_conversation(conversation_id)
         if conv:
             session_id = conv.claude_session_id
+            conv_working_dir = conv.working_dir
             is_first_turn = not session_id  # First turn if no stored session yet
         else:
             # Auto-create conversation if it doesn't exist
@@ -301,8 +317,10 @@ async def _handle_message(websocket: WebSocket, msg: dict):
     elif session_id:
         # Client provided a session_id — check if the conversation actually has one stored
         conv = sessions.get_conversation(conversation_id) if conversation_id else None
-        if conv and not conv.claude_session_id:
-            is_first_turn = True
+        if conv:
+            conv_working_dir = conv.working_dir
+            if not conv.claude_session_id:
+                is_first_turn = True
 
     # Log user message to history (original text, not the expanded prompt)
     sessions.append_history(conversation_id, {
@@ -310,16 +328,20 @@ async def _handle_message(websocket: WebSocket, msg: dict):
         "text": text or "[image]",
     })
 
+    # Use per-conversation working_dir, fall back to global
+    cwd = conv_working_dir or get_working_dir()
+
     async with claude_lock:
-        await _run_claude(websocket, prompt, conversation_id, session_id, is_first_turn)
+        await _run_claude(websocket, prompt, conversation_id, session_id, is_first_turn, cwd=cwd)
 
 
 async def _handle_new_conversation(websocket: WebSocket, msg: dict):
     """Create a new conversation — tracked in session manager."""
     name = msg.get("name", "New conversation")
     conversation_id = msg.get("conversation_id", f"conv_{int(time.time())}")
+    working_dir = msg.get("working_dir")
 
-    conv = sessions.create_conversation(conversation_id, name)
+    conv = sessions.create_conversation(conversation_id, name, working_dir=working_dir)
     logger.info(f"Created conversation: {conv.id} ({conv.name})")
 
     await _send(websocket, {
@@ -350,7 +372,7 @@ async def _handle_cancel(websocket: WebSocket):
         await _send(websocket, {"type": "error", "detail": "No active process to cancel"})
 
 
-async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, session_id: str | None, is_first_turn: bool = False):
+async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, session_id: str | None, is_first_turn: bool = False, cwd: str | None = None):
     """Spawn claude -p subprocess and stream events back via WebSocket."""
     global active_process
 
@@ -374,6 +396,7 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
 
     accumulated_text = ""
     assistant_segments: list[str] = []  # Each text segment between tool uses
+    result_is_error = False
     forwarder = EventForwarder()
 
     # Clear CLAUDECODE env var so claude doesn't think it's nested
@@ -390,7 +413,7 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
             stderr=asyncio.subprocess.PIPE,
             limit=32 * 1024 * 1024,  # 32MB readline limit
             env=env,
-            cwd=get_working_dir(),
+            cwd=cwd or get_working_dir(),
         )
 
         new_session_id = session_id
@@ -442,7 +465,23 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
 
             # Capture session ID from result events
             if event.get("type") == "result":
-                new_session_id = event.get("session_id", new_session_id)
+                result_is_error = event.get("is_error", False)
+                if result_is_error:
+                    errors = event.get("errors", [])
+                    logger.warning(f"claude result error: {errors}")
+                    # Don't store session IDs from failed results — they may be
+                    # invalid and would poison future --resume attempts.
+                else:
+                    new_session_id = event.get("session_id", new_session_id)
+                # Fall back: if no assistant events produced text, use result text
+                if not accumulated_text and event.get("result"):
+                    accumulated_text = event["result"]
+                    if not client_gone:
+                        await _send(websocket, {
+                            "type": "text_delta",
+                            "text": accumulated_text,
+                            "conversation_id": conversation_id,
+                        })
 
         await active_process.wait()
 
@@ -453,6 +492,16 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
                 logger.warning(f"claude stderr: {stderr_data.decode().strip()}")
 
         logger.info(f"claude process exited with code {active_process.returncode}")
+
+        # If --resume failed with an invalid session, clear it and retry without resume
+        if result_is_error and session_id and not accumulated_text:
+            logger.info(f"Resume failed for {conversation_id} — clearing session and retrying")
+            sessions.update_session_id(conversation_id, None)
+            if websocket.client_state == WebSocketState.CONNECTED:
+                await _send(websocket, {"type": "error", "detail": "Session expired, retrying..."})
+            # Retry without --resume (recursive call with session_id=None)
+            await _run_claude(websocket, text, conversation_id, session_id=None, is_first_turn=True, cwd=cwd)
+            return
 
         # Update session tracking
         if new_session_id and conversation_id:
