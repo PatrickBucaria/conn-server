@@ -118,7 +118,7 @@ async def list_projects(authorization: str = Header(None)):
     projects_root = Path(get_working_dir())
     if not projects_root.is_dir():
         return {"projects": []}
-    projects = []
+    projects = [{"name": "All Projects", "path": str(projects_root)}]
     for entry in sorted(projects_root.iterdir()):
         if entry.is_dir() and not entry.name.startswith("."):
             projects.append({"name": entry.name, "path": str(entry)})
@@ -397,6 +397,7 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
     accumulated_text = ""
     assistant_segments: list[str] = []  # Each text segment between tool uses
     result_is_error = False
+    saw_streaming_deltas = False  # Track if we got content_block_delta events
     forwarder = EventForwarder()
 
     # Clear CLAUDECODE env var so claude doesn't think it's nested
@@ -449,19 +450,32 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
             if not client_gone:
                 await forwarder.forward(websocket, event, conversation_id)
 
-            # Accumulate text and track tool boundaries for history (works regardless of client state)
-            if event.get("type") == "assistant" and "message" in event:
-                for block in event["message"].get("content", []):
-                    if block.get("type") == "text":
-                        accumulated_text += block["text"]
-                    elif block.get("type") == "tool_use":
-                        if accumulated_text.strip():
-                            assistant_segments.append(accumulated_text)
-                            accumulated_text = ""
-            elif event.get("type") == "content_block_delta":
+            # Accumulate text and track tool boundaries for history (works regardless of client state).
+            # IMPORTANT: Only use ONE source of text — content_block_delta (streaming) OR
+            # assistant (summary). Using both causes double-counting since the assistant
+            # event repeats the same text that was already streamed via deltas.
+            if event.get("type") == "content_block_delta":
                 delta = event.get("delta", {})
                 if delta.get("type") == "text_delta":
+                    saw_streaming_deltas = True
                     accumulated_text += delta.get("text", "")
+            elif event.get("type") == "content_block_start":
+                block = event.get("content_block", {})
+                if block.get("type") == "tool_use":
+                    # Tool boundary — save accumulated text as a segment
+                    if accumulated_text.strip():
+                        assistant_segments.append(accumulated_text)
+                        accumulated_text = ""
+            elif event.get("type") == "assistant" and "message" in event:
+                # Fallback: only use assistant events if we never got streaming deltas
+                if not saw_streaming_deltas:
+                    for block in event["message"].get("content", []):
+                        if block.get("type") == "text":
+                            accumulated_text += block["text"]
+                        elif block.get("type") == "tool_use":
+                            if accumulated_text.strip():
+                                assistant_segments.append(accumulated_text)
+                                accumulated_text = ""
 
             # Capture session ID from result events
             if event.get("type") == "result":
@@ -597,15 +611,110 @@ async def _generate_summary(websocket: WebSocket, conversation_id: str):
 class EventForwarder:
     """Stateful mapper from claude stream-json events to our WebSocket protocol.
 
-    The Claude CLI stream-json format emits complete `assistant` events (one per turn)
-    containing all content blocks, rather than streaming content_block_start/delta/stop.
-    Each assistant event may contain text and/or tool_use blocks.
+    The Claude CLI stream-json format emits:
+    - content_block_start / content_block_delta / content_block_stop for streaming
+    - assistant events with complete content blocks (text + tool_use) after each turn
+
+    We use content_block_start/stop for real-time tool notifications and
+    content_block_delta for streaming text. The assistant event is used as a
+    fallback for tool info only when content_block events didn't fire.
     """
+
+    def __init__(self):
+        self._saw_streaming_events = False  # Track if we got content_block events
+        self._active_tool_name: str | None = None
+        self._tool_input_json: str = ""  # Accumulated input_json_delta fragments
+        self._tool_start_sent: bool = False  # Whether we sent the initial tool_start
 
     async def forward(self, websocket: WebSocket, event: dict, conversation_id: str) -> dict | None:
         event_type = event.get("type")
 
-        if event_type == "assistant" and "message" in event:
+        if event_type == "content_block_start":
+            self._saw_streaming_events = True
+            block = event.get("content_block", {})
+            if block.get("type") == "tool_use":
+                self._active_tool_name = block.get("name", "")
+                self._tool_input_json = ""
+                self._tool_start_sent = False
+                tool_input = block.get("input", {})
+                summary = _summarize_tool_input(self._active_tool_name, tool_input)
+                if summary:
+                    # Input was available immediately — send tool_start now
+                    self._tool_start_sent = True
+                    out = {
+                        "type": "tool_start",
+                        "tool": self._active_tool_name,
+                        "input_summary": summary,
+                        "conversation_id": conversation_id,
+                    }
+                    await _send(websocket, out)
+                    return out
+                # Otherwise wait for input_json_delta to build the summary
+            return None
+
+        elif event_type == "content_block_stop":
+            if self._active_tool_name is not None:
+                # If we haven't sent tool_start yet, send it now with accumulated input
+                if not self._tool_start_sent:
+                    summary = ""
+                    if self._tool_input_json:
+                        try:
+                            input_data = json.loads(self._tool_input_json)
+                            summary = _summarize_tool_input(self._active_tool_name, input_data)
+                        except json.JSONDecodeError:
+                            summary = self._tool_input_json[:80]
+                    start_out = {
+                        "type": "tool_start",
+                        "tool": self._active_tool_name,
+                        "input_summary": summary,
+                        "conversation_id": conversation_id,
+                    }
+                    await _send(websocket, start_out)
+                self._active_tool_name = None
+                self._tool_input_json = ""
+                self._tool_start_sent = False
+                out = {"type": "tool_done", "conversation_id": conversation_id}
+                await _send(websocket, out)
+                return out
+            return None
+
+        elif event_type == "content_block_delta":
+            self._saw_streaming_events = True
+            delta = event.get("delta", {})
+            if delta.get("type") == "text_delta":
+                out = {
+                    "type": "text_delta",
+                    "text": delta.get("text", ""),
+                    "conversation_id": conversation_id,
+                }
+                await _send(websocket, out)
+                return out
+            elif delta.get("type") == "input_json_delta" and self._active_tool_name:
+                # Accumulate tool input fragments
+                self._tool_input_json += delta.get("partial_json", "")
+                # Once we have enough to parse, send tool_start with summary
+                if not self._tool_start_sent and len(self._tool_input_json) > 5:
+                    try:
+                        input_data = json.loads(self._tool_input_json)
+                        summary = _summarize_tool_input(self._active_tool_name, input_data)
+                        if summary:
+                            self._tool_start_sent = True
+                            out = {
+                                "type": "tool_start",
+                                "tool": self._active_tool_name,
+                                "input_summary": summary,
+                                "conversation_id": conversation_id,
+                            }
+                            await _send(websocket, out)
+                            return out
+                    except json.JSONDecodeError:
+                        pass  # Not valid JSON yet — keep accumulating
+            return None
+
+        elif event_type == "assistant" and "message" in event:
+            # Fallback: only use assistant events if we didn't get streaming events
+            if self._saw_streaming_events:
+                return None
             last_out = None
             message = event["message"]
             for block in message.get("content", []):
@@ -618,7 +727,6 @@ class EventForwarder:
                     await _send(websocket, out)
                     last_out = out
                 elif block.get("type") == "tool_use":
-                    # Send tool_start then immediately tool_done (tool already completed)
                     start_out = {
                         "type": "tool_start",
                         "tool": block.get("name", ""),
@@ -630,17 +738,6 @@ class EventForwarder:
                     await _send(websocket, done_out)
                     last_out = start_out
             return last_out
-
-        elif event_type == "content_block_delta":
-            delta = event.get("delta", {})
-            if delta.get("type") == "text_delta":
-                out = {
-                    "type": "text_delta",
-                    "text": delta.get("text", ""),
-                    "conversation_id": conversation_id,
-                }
-                await _send(websocket, out)
-                return out
 
         return None
 
