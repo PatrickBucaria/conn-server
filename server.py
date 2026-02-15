@@ -425,7 +425,7 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
     logger.info(f"Running: {' '.join(cmd[:6])}...")
 
     accumulated_text = ""
-    assistant_segments: list[str] = []  # Each text segment between tool uses
+    in_tool_use = False  # Track when we're inside a tool use block
     result_is_error = False
     saw_streaming_deltas = False  # Track if we got content_block_delta events
     forwarder = EventForwarder()
@@ -480,7 +480,7 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
             if not client_gone:
                 await forwarder.forward(websocket, event, conversation_id)
 
-            # Accumulate text and track tool boundaries for history (works regardless of client state).
+            # Accumulate ALL text into a single string for history — one response = one entry.
             # IMPORTANT: Only use ONE source of text — content_block_delta (streaming) OR
             # assistant (summary). Using both causes double-counting since the assistant
             # event repeats the same text that was already streamed via deltas.
@@ -488,24 +488,21 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
                 delta = event.get("delta", {})
                 if delta.get("type") == "text_delta":
                     saw_streaming_deltas = True
+                    # Add separator when text resumes after a tool use
+                    if in_tool_use and accumulated_text:
+                        accumulated_text += "\n\n"
+                    in_tool_use = False
                     accumulated_text += delta.get("text", "")
             elif event.get("type") == "content_block_start":
                 block = event.get("content_block", {})
                 if block.get("type") == "tool_use":
-                    # Tool boundary — save accumulated text as a segment
-                    if accumulated_text.strip():
-                        assistant_segments.append(accumulated_text)
-                        accumulated_text = ""
+                    in_tool_use = True
             elif event.get("type") == "assistant" and "message" in event:
                 # Fallback: only use assistant events if we never got streaming deltas
                 if not saw_streaming_deltas:
                     for block in event["message"].get("content", []):
                         if block.get("type") == "text":
                             accumulated_text += block["text"]
-                        elif block.get("type") == "tool_use":
-                            if accumulated_text.strip():
-                                assistant_segments.append(accumulated_text)
-                                accumulated_text = ""
 
             # Capture session ID from result events
             if event.get("type") == "result":
@@ -551,15 +548,11 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
         if new_session_id and conversation_id:
             sessions.update_session_id(conversation_id, new_session_id)
 
-        # Flush any remaining text as a final segment
+        # Save the complete assistant response as a single history entry
         if accumulated_text.strip():
-            assistant_segments.append(accumulated_text)
-
-        # Log each assistant text segment as a separate history entry
-        for segment in assistant_segments:
             sessions.append_history(conversation_id, {
                 "role": "assistant",
-                "text": segment,
+                "text": accumulated_text,
             })
 
         if websocket.client_state == WebSocketState.CONNECTED:
