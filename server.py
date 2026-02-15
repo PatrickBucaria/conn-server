@@ -125,6 +125,36 @@ async def list_projects(authorization: str = Header(None)):
     return {"projects": projects}
 
 
+from pydantic import BaseModel
+
+
+class CreateProjectRequest(BaseModel):
+    name: str
+
+
+@app.post("/projects")
+async def create_project(request: CreateProjectRequest, authorization: str = Header(None)):
+    """Create a new project directory under the projects root."""
+    _verify_rest_auth(authorization)
+
+    name = request.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Project name is required")
+    if "/" in name or "\\" in name or ".." in name or name.startswith("."):
+        raise HTTPException(status_code=400, detail="Invalid project name")
+
+    projects_root = Path(get_working_dir())
+    new_project = projects_root / name
+
+    if new_project.exists():
+        raise HTTPException(status_code=409, detail="Project already exists")
+
+    new_project.mkdir(parents=True)
+    logger.info(f"Created project directory: {new_project}")
+
+    return {"name": name, "path": str(new_project)}
+
+
 @app.post("/restart")
 async def restart_server(authorization: str = Header(None)):
     """Gracefully restart the server. Cancels active Claude process, then exits.
