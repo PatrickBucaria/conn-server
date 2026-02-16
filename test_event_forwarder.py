@@ -340,10 +340,15 @@ class TestToolInputSummarizer:
         assert _summarize_tool_input(None, {"anything": "value"}) == ""
         assert _summarize_tool_input("", {"anything": "value"}) == ""
 
-    def test_unknown_tool_uses_str_repr(self):
+    def test_unknown_tool_uses_first_string_value(self):
         result = _summarize_tool_input("CustomTool", {"key": "value"})
-        assert "key" in result
-        assert "value" in result
+        assert result == "value"
+
+    def test_unknown_tool_empty_input(self):
+        assert _summarize_tool_input("CustomTool", {}) == ""
+
+    def test_unknown_tool_non_string_values(self):
+        assert _summarize_tool_input("CustomTool", {"count": 42}) == ""
 
     def test_read_empty_input(self):
         assert _summarize_tool_input("Read", {}) == ""

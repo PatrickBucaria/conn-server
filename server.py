@@ -910,7 +910,26 @@ def _summarize_tool_input(tool_name: str | None, input_data: dict) -> str:
     elif tool_name == "Bash":
         cmd = input_data.get("command", "")
         return cmd[:80] + ("..." if len(cmd) > 80 else "")
-    return str(input_data)[:80]
+    elif tool_name == "Task":
+        return input_data.get("description") or input_data.get("prompt", "")[:80]
+    elif tool_name == "TodoWrite":
+        todos = input_data.get("todos", [])
+        in_progress = [t.get("content", "") for t in todos if t.get("status") == "in_progress"]
+        if in_progress:
+            return in_progress[0]
+        return f"{len(todos)} items"
+    elif tool_name == "WebSearch":
+        return input_data.get("query", "")
+    elif tool_name == "WebFetch":
+        return input_data.get("url", "")
+    elif tool_name == "NotebookEdit":
+        return input_data.get("notebook_path", "")
+
+    # Fallback: pick the first string value instead of dumping raw dict
+    for val in input_data.values():
+        if isinstance(val, str) and val:
+            return val[:80] + ("..." if len(val) > 80 else "")
+    return ""
 
 
 MAX_WS_MESSAGE_SIZE = 1 * 1024 * 1024  # 1MB — safety cap for WebSocket messages
