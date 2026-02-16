@@ -17,16 +17,24 @@ from starlette.websockets import WebSocketState
 
 from auth import verify_token
 from config import load_config, get_working_dir, UPLOADS_DIR, LOG_DIR, WORKING_DIR
+from git_utils import get_current_branch, is_git_repo, create_worktree, remove_worktree
 from session_manager import SessionManager
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
 # Global state
-claude_lock = asyncio.Lock()
-active_process: asyncio.subprocess.Process | None = None
+active_processes: dict[str, asyncio.subprocess.Process] = {}
+conversation_locks: dict[str, asyncio.Lock] = {}
 start_time: float = 0
 sessions = SessionManager()
+
+
+def _get_conversation_lock(conversation_id: str) -> asyncio.Lock:
+    """Get or create a per-conversation lock."""
+    if conversation_id not in conversation_locks:
+        conversation_locks[conversation_id] = asyncio.Lock()
+    return conversation_locks[conversation_id]
 
 
 @asynccontextmanager
@@ -55,12 +63,28 @@ async def health():
 @app.get("/conversations")
 async def list_conversations(authorization: str = Header(None)):
     _verify_rest_auth(authorization)
-    return {"conversations": sessions.list_conversations()}
+    convs = sessions.list_conversations()
+    # Compute git branch per unique working_dir (cached within request)
+    branch_cache: dict[str, str | None] = {}
+    for conv in convs:
+        wd = conv.get("working_dir")
+        if wd:
+            if wd not in branch_cache:
+                branch_cache[wd] = get_current_branch(wd)
+            conv["git_branch"] = branch_cache[wd]
+        else:
+            conv["git_branch"] = None
+    return {"conversations": convs}
 
 
 @app.delete("/conversations/{conversation_id}")
 async def delete_conversation(conversation_id: str, authorization: str = Header(None)):
     _verify_rest_auth(authorization)
+    # Clean up worktree before deleting conversation data
+    conv = sessions.get_conversation(conversation_id)
+    if conv and conv.git_worktree_path and conv.original_working_dir:
+        remove_worktree(conv.original_working_dir, conversation_id)
+        logger.info(f"Cleaned up worktree for conversation {conversation_id}")
     if sessions.delete_conversation(conversation_id):
         # Clean up uploaded images for this conversation
         conv_uploads = UPLOADS_DIR / conversation_id
@@ -111,6 +135,14 @@ async def upload_image(
     return {"path": str(dest)}
 
 
+@app.get("/conversations/active")
+async def active_conversations(authorization: str = Header(None)):
+    """List conversation IDs that currently have a running Claude process."""
+    _verify_rest_auth(authorization)
+    active_ids = [cid for cid, proc in active_processes.items() if proc.returncode is None]
+    return {"active_conversation_ids": active_ids}
+
+
 @app.get("/projects")
 async def list_projects(authorization: str = Header(None)):
     """List subdirectories of the projects root as available project contexts."""
@@ -118,10 +150,10 @@ async def list_projects(authorization: str = Header(None)):
     projects_root = Path(get_working_dir())
     if not projects_root.is_dir():
         return {"projects": []}
-    projects = [{"name": "All Projects", "path": str(projects_root)}]
+    projects = [{"name": "All Projects", "path": str(projects_root), "git_branch": get_current_branch(str(projects_root))}]
     for entry in sorted(projects_root.iterdir()):
         if entry.is_dir() and not entry.name.startswith("."):
-            projects.append({"name": entry.name, "path": str(entry)})
+            projects.append({"name": entry.name, "path": str(entry), "git_branch": get_current_branch(str(entry))})
     return {"projects": projects}
 
 
@@ -163,8 +195,8 @@ async def restart_server(authorization: str = Header(None)):
 
     logger.info("Restart requested — shutting down gracefully")
 
-    # Cancel any active Claude subprocess
-    await _cancel_active_process()
+    # Cancel all active Claude subprocesses
+    await _cancel_all_processes()
 
     # Schedule the actual exit slightly after returning the response
     async def _exit():
@@ -279,8 +311,10 @@ async def ws_chat(websocket: WebSocket):
                 await _handle_message(websocket, msg)
             elif msg_type == "new_conversation":
                 await _handle_new_conversation(websocket, msg)
+            elif msg_type == "update_permissions":
+                await _handle_update_permissions(websocket, msg)
             elif msg_type == "cancel":
-                await _handle_cancel(websocket)
+                await _handle_cancel(websocket, msg)
             else:
                 await _send(websocket, {"type": "error", "detail": f"Unknown message type: {msg_type}"})
 
@@ -320,15 +354,17 @@ async def _handle_message(websocket: WebSocket, msg: dict):
 
     prompt = _build_prompt(text, image_paths)
 
-    if claude_lock.locked():
-        logger.info("Lock held — cancelling previous process for new message")
-        await _cancel_active_process()
+    conv_lock = _get_conversation_lock(conversation_id)
+
+    if conv_lock.locked():
+        logger.info(f"Lock held for {conversation_id} — cancelling previous process")
+        await _cancel_conversation_process(conversation_id)
         # Wait briefly for the lock to release
         try:
-            await asyncio.wait_for(claude_lock.acquire(), timeout=5.0)
-            claude_lock.release()
+            await asyncio.wait_for(conv_lock.acquire(), timeout=5.0)
+            conv_lock.release()
         except asyncio.TimeoutError:
-            await _send(websocket, {"type": "busy", "detail": "Another query is still finishing"})
+            await _send(websocket, {"type": "busy", "detail": "Conversation is still finishing", "conversation_id": conversation_id})
             return
 
     # Look up session_id and working_dir from conversation if not provided
@@ -358,21 +394,50 @@ async def _handle_message(websocket: WebSocket, msg: dict):
         "text": text or "[image]",
     })
 
-    # Use per-conversation working_dir, fall back to global
-    cwd = conv_working_dir or get_working_dir()
+    # Use worktree path if this conversation is isolated, otherwise working_dir
+    conv_obj = sessions.get_conversation(conversation_id)
+    if conv_obj and conv_obj.git_worktree_path:
+        cwd = conv_obj.git_worktree_path
+    else:
+        cwd = conv_working_dir or get_working_dir()
 
-    async with claude_lock:
+    async with conv_lock:
         await _run_claude(websocket, prompt, conversation_id, session_id, is_first_turn, cwd=cwd)
 
 
 async def _handle_new_conversation(websocket: WebSocket, msg: dict):
-    """Create a new conversation — tracked in session manager."""
+    """Create a new conversation — tracked in session manager.
+
+    If another conversation already has an active Claude process in the same
+    working_dir (and it's a git repo), automatically creates a git worktree
+    so both agents run in isolated directories.
+    """
     name = msg.get("name", "New conversation")
     conversation_id = msg.get("conversation_id", f"conv_{int(time.time())}")
     working_dir = msg.get("working_dir")
+    allowed_tools = msg.get("allowed_tools")
 
-    conv = sessions.create_conversation(conversation_id, name, working_dir=working_dir)
-    logger.info(f"Created conversation: {conv.id} ({conv.name})")
+    conv = sessions.create_conversation(conversation_id, name, working_dir=working_dir, allowed_tools=allowed_tools)
+
+    # Check if worktree isolation is needed
+    if working_dir and is_git_repo(working_dir):
+        active_in_project = [
+            cid for cid, proc in active_processes.items()
+            if proc.returncode is None and _working_dir_matches(cid, working_dir)
+        ]
+        if active_in_project:
+            logger.info(f"Active conversations in {working_dir}: {active_in_project} — creating worktree")
+            wt_path = create_worktree(working_dir, conversation_id)
+            if wt_path:
+                sessions.update_worktree(conversation_id, wt_path, working_dir)
+                logger.info(f"Created conversation: {conv.id} ({conv.name}) [worktree: {wt_path}]")
+            else:
+                logger.warning(f"Worktree creation failed for {conversation_id} — running in shared directory")
+                logger.info(f"Created conversation: {conv.id} ({conv.name})")
+        else:
+            logger.info(f"Created conversation: {conv.id} ({conv.name})")
+    else:
+        logger.info(f"Created conversation: {conv.id} ({conv.name})")
 
     await _send(websocket, {
         "type": "conversation_created",
@@ -381,35 +446,90 @@ async def _handle_new_conversation(websocket: WebSocket, msg: dict):
     })
 
 
-async def _cancel_active_process():
-    """Terminate the active claude subprocess if one is running."""
-    global active_process
-    if active_process and active_process.returncode is None:
-        logger.info("Terminating active claude process")
-        active_process.terminate()
+def _working_dir_matches(conversation_id: str, working_dir: str) -> bool:
+    """Check if a conversation targets the given working directory."""
+    conv = sessions.get_conversation(conversation_id)
+    if not conv:
+        return False
+    return conv.working_dir == working_dir or conv.original_working_dir == working_dir
+
+
+VALID_TOOLS = {"Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch"}
+
+
+async def _handle_update_permissions(websocket: WebSocket, msg: dict):
+    """Update allowed tools for an existing conversation."""
+    conversation_id = msg.get("conversation_id", "")
+    allowed_tools = msg.get("allowed_tools", [])
+
+    if not conversation_id:
+        await _send(websocket, {"type": "error", "detail": "Missing conversation_id"})
+        return
+
+    invalid = set(allowed_tools) - VALID_TOOLS
+    if invalid:
+        await _send(websocket, {"type": "error", "detail": f"Invalid tools: {invalid}"})
+        return
+
+    if sessions.update_allowed_tools(conversation_id, allowed_tools):
+        await _send(websocket, {
+            "type": "permissions_updated",
+            "conversation_id": conversation_id,
+            "allowed_tools": allowed_tools,
+        })
+    else:
+        await _send(websocket, {"type": "error", "detail": "Conversation not found"})
+
+
+async def _cancel_conversation_process(conversation_id: str) -> bool:
+    """Terminate the active claude subprocess for a specific conversation."""
+    proc = active_processes.get(conversation_id)
+    if proc and proc.returncode is None:
+        logger.info(f"Terminating claude process for {conversation_id}")
+        proc.terminate()
         try:
-            await asyncio.wait_for(active_process.wait(), timeout=5.0)
+            await asyncio.wait_for(proc.wait(), timeout=5.0)
         except asyncio.TimeoutError:
-            active_process.kill()
+            proc.kill()
         return True
     return False
 
 
-async def _handle_cancel(websocket: WebSocket):
-    if await _cancel_active_process():
-        await _send(websocket, {"type": "cancelled"})
+async def _cancel_all_processes():
+    """Terminate all active claude subprocesses."""
+    for cid in list(active_processes.keys()):
+        await _cancel_conversation_process(cid)
+
+
+async def _handle_cancel(websocket: WebSocket, msg: dict):
+    conversation_id = msg.get("conversation_id")
+    if conversation_id:
+        if await _cancel_conversation_process(conversation_id):
+            await _send(websocket, {"type": "cancelled", "conversation_id": conversation_id})
+        else:
+            await _send(websocket, {"type": "error", "detail": "No active process for this conversation", "conversation_id": conversation_id})
     else:
-        await _send(websocket, {"type": "error", "detail": "No active process to cancel"})
+        # Backward compatibility: cancel without conversation_id cancels all
+        cancelled_any = False
+        for cid in list(active_processes.keys()):
+            if await _cancel_conversation_process(cid):
+                await _send(websocket, {"type": "cancelled", "conversation_id": cid})
+                cancelled_any = True
+        if not cancelled_any:
+            await _send(websocket, {"type": "error", "detail": "No active process to cancel"})
 
 
 async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, session_id: str | None, is_first_turn: bool = False, cwd: str | None = None):
     """Spawn claude -p subprocess and stream events back via WebSocket."""
-    global active_process
+
+    # Use per-conversation allowed tools, falling back to all tools
+    conv = sessions.get_conversation(conversation_id)
+    tools = ",".join(conv.allowed_tools) if conv and conv.allowed_tools else "Read,Write,Edit,Bash,Glob,Grep,WebSearch,WebFetch"
 
     cmd = [
         "claude", "-p", text,
         "--output-format", "stream-json",
-        "--allowedTools", "Read,Write,Edit,Bash,Glob,Grep",
+        "--allowedTools", tools,
         "--max-turns", "50",
         "--verbose",
         "--append-system-prompt",
@@ -438,7 +558,7 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
         # can emit very large single lines (e.g. base64-encoded image data from
         # Read tool results). The default asyncio limit is 64KB, which causes
         # "Separator is not found, and chunk exceed the limit" errors.
-        active_process = await asyncio.create_subprocess_exec(
+        process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -446,12 +566,13 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
             env=env,
             cwd=cwd or get_working_dir(),
         )
+        active_processes[conversation_id] = process
 
         new_session_id = session_id
 
         client_gone = False
 
-        async for raw_line in active_process.stdout:
+        async for raw_line in process.stdout:
             if not client_gone and websocket.client_state != WebSocketState.CONNECTED:
                 logger.info("Client disconnected during streaming — continuing to capture response")
                 client_gone = True
@@ -524,15 +645,15 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
                             "conversation_id": conversation_id,
                         })
 
-        await active_process.wait()
+        await process.wait()
 
         # Log stderr for debugging
-        if active_process.stderr:
-            stderr_data = await active_process.stderr.read()
+        if process.stderr:
+            stderr_data = await process.stderr.read()
             if stderr_data:
                 logger.warning(f"claude stderr: {stderr_data.decode().strip()}")
 
-        logger.info(f"claude process exited with code {active_process.returncode}")
+        logger.info(f"claude process exited with code {process.returncode}")
 
         # If --resume failed with an invalid session, clear it and retry without resume
         if result_is_error and session_id and not accumulated_text:
@@ -556,11 +677,16 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
             })
 
         if websocket.client_state == WebSocketState.CONNECTED:
-            await _send(websocket, {
+            complete_msg = {
                 "type": "message_complete",
                 "conversation_id": conversation_id,
                 "session_id": new_session_id,
-            })
+            }
+            # Include branch info for worktree conversations
+            conv_info = sessions.get_conversation(conversation_id)
+            if conv_info and conv_info.git_worktree_path:
+                complete_msg["git_branch"] = f"claude-remote/{conversation_id}"
+            await _send(websocket, complete_msg)
 
         # Generate AI summary for new conversations (first turn only)
         logger.info(f"Summary check: is_first_turn={is_first_turn}, new_session_id={new_session_id!r}")
@@ -573,7 +699,11 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
         if websocket.client_state == WebSocketState.CONNECTED:
             await _send(websocket, {"type": "error", "detail": str(e)})
     finally:
-        active_process = None
+        active_processes.pop(conversation_id, None)
+        # Clean up lock if no longer held
+        lock = conversation_locks.get(conversation_id)
+        if lock and not lock.locked():
+            conversation_locks.pop(conversation_id, None)
 
 
 async def _generate_summary(websocket: WebSocket, conversation_id: str):
@@ -603,11 +733,12 @@ async def _generate_summary(websocket: WebSocket, conversation_id: str):
         env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
         proc = await asyncio.create_subprocess_exec(
             "claude", "-p", prompt,
-            "--max-turns", "1",
             "--output-format", "text",
+            "--max-turns", "0",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
+            cwd="/tmp",
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30.0)
         summary = stdout.decode().strip()

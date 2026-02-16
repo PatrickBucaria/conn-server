@@ -106,6 +106,140 @@ class TestSessionManagerConversations:
         assert updated.last_message_at >= original_time
 
 
+class TestSessionManagerPermissions:
+    """Test per-conversation allowed_tools."""
+
+    def test_create_conversation_with_allowed_tools(self, tmp_config_dir):
+        sm = SessionManager()
+        conv = sm.create_conversation("conv_1", "Test", allowed_tools=["Read", "Grep"])
+
+        assert conv.allowed_tools == ["Read", "Grep"]
+
+    def test_create_conversation_default_allowed_tools(self, tmp_config_dir):
+        sm = SessionManager()
+        conv = sm.create_conversation("conv_1", "Test")
+
+        assert conv.allowed_tools is None
+
+    def test_update_allowed_tools(self, tmp_config_dir):
+        sm = SessionManager()
+        sm.create_conversation("conv_1", "Test")
+
+        result = sm.update_allowed_tools("conv_1", ["Read", "Write"])
+        assert result is True
+
+        conv = sm.get_conversation("conv_1")
+        assert conv.allowed_tools == ["Read", "Write"]
+
+    def test_update_allowed_tools_not_found(self, tmp_config_dir):
+        sm = SessionManager()
+        assert sm.update_allowed_tools("nonexistent", ["Read"]) is False
+
+    def test_allowed_tools_persist_across_instances(self, tmp_config_dir):
+        sm1 = SessionManager()
+        sm1.create_conversation("conv_1", "Test", allowed_tools=["Bash", "Glob"])
+
+        sm2 = SessionManager()
+        conv = sm2.get_conversation("conv_1")
+        assert conv.allowed_tools == ["Bash", "Glob"]
+
+    def test_allowed_tools_in_list_conversations(self, tmp_config_dir):
+        sm = SessionManager()
+        sm.create_conversation("conv_1", "Test", allowed_tools=["Read"])
+
+        convs = sm.list_conversations()
+        assert convs[0]["allowed_tools"] == ["Read"]
+
+    def test_backward_compatibility_no_allowed_tools(self, tmp_config_dir):
+        """Existing sessions.json without allowed_tools should load fine."""
+        import json
+        from config import SESSIONS_FILE
+
+        # Write a sessions.json without the allowed_tools field
+        data = {"conversations": [{
+            "id": "old_conv",
+            "name": "Old",
+            "claude_session_id": None,
+            "created_at": "2024-01-01T00:00:00+00:00",
+            "last_message_at": "2024-01-01T00:00:00+00:00",
+            "working_dir": None,
+        }]}
+        with open(SESSIONS_FILE, "w") as f:
+            json.dump(data, f)
+
+        sm = SessionManager()
+        conv = sm.get_conversation("old_conv")
+        assert conv is not None
+        assert conv.allowed_tools is None
+
+
+class TestSessionManagerWorktree:
+    """Test worktree tracking fields."""
+
+    def test_create_conversation_default_worktree_fields(self, tmp_config_dir):
+        sm = SessionManager()
+        conv = sm.create_conversation("conv_1", "Test")
+
+        assert conv.git_worktree_path is None
+        assert conv.original_working_dir is None
+
+    def test_update_worktree(self, tmp_config_dir):
+        sm = SessionManager()
+        sm.create_conversation("conv_1", "Test")
+
+        result = sm.update_worktree("conv_1", "/tmp/worktree/conv_1", "/projects/foo")
+        assert result is True
+
+        conv = sm.get_conversation("conv_1")
+        assert conv.git_worktree_path == "/tmp/worktree/conv_1"
+        assert conv.original_working_dir == "/projects/foo"
+
+    def test_update_worktree_not_found(self, tmp_config_dir):
+        sm = SessionManager()
+        assert sm.update_worktree("nonexistent", "/tmp/wt", "/tmp/orig") is False
+
+    def test_worktree_fields_persist(self, tmp_config_dir):
+        sm1 = SessionManager()
+        sm1.create_conversation("conv_1", "Test")
+        sm1.update_worktree("conv_1", "/tmp/wt/conv_1", "/projects/foo")
+
+        sm2 = SessionManager()
+        conv = sm2.get_conversation("conv_1")
+        assert conv.git_worktree_path == "/tmp/wt/conv_1"
+        assert conv.original_working_dir == "/projects/foo"
+
+    def test_worktree_fields_in_list_conversations(self, tmp_config_dir):
+        sm = SessionManager()
+        sm.create_conversation("conv_1", "Test")
+        sm.update_worktree("conv_1", "/tmp/wt/conv_1", "/projects/foo")
+
+        convs = sm.list_conversations()
+        assert convs[0]["git_worktree_path"] == "/tmp/wt/conv_1"
+        assert convs[0]["original_working_dir"] == "/projects/foo"
+
+    def test_backward_compatibility_no_worktree_fields(self, tmp_config_dir):
+        """Existing sessions.json without worktree fields should load fine."""
+        from config import SESSIONS_FILE
+
+        data = {"conversations": [{
+            "id": "old_conv",
+            "name": "Old",
+            "claude_session_id": None,
+            "created_at": "2024-01-01T00:00:00+00:00",
+            "last_message_at": "2024-01-01T00:00:00+00:00",
+            "working_dir": None,
+            "allowed_tools": None,
+        }]}
+        with open(SESSIONS_FILE, "w") as f:
+            json.dump(data, f)
+
+        sm = SessionManager()
+        conv = sm.get_conversation("old_conv")
+        assert conv is not None
+        assert conv.git_worktree_path is None
+        assert conv.original_working_dir is None
+
+
 class TestSessionManagerPersistence:
     """Test that data survives re-instantiation (file I/O)."""
 

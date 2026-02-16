@@ -1,6 +1,7 @@
 """Tests for REST API endpoints."""
 
 import json
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -9,6 +10,16 @@ from httpx import AsyncClient, ASGITransport
 
 from server import app
 from session_manager import SessionManager
+
+
+def _init_git_repo(path, branch="main"):
+    """Helper to create a minimal git repo at the given path."""
+    subprocess.run(["git", "init", "-b", branch, str(path)], capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=str(path), capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=str(path), capture_output=True, check=True)
+    (path / "README.md").write_text("test")
+    subprocess.run(["git", "add", "."], cwd=str(path), capture_output=True, check=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=str(path), capture_output=True, check=True)
 
 
 @pytest.fixture
@@ -83,6 +94,35 @@ class TestConversationsEndpoint:
         async with test_client as client:
             response = await client.get("/conversations/nonexistent/history", headers=headers)
         assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_conversations_include_git_branch(self, test_client, headers, tmp_config_dir):
+        """Conversations with a git repo working_dir should include git_branch."""
+        project_dir = tmp_config_dir["projects_dir"] / "GitProject"
+        project_dir.mkdir()
+        _init_git_repo(project_dir, branch="feature")
+
+        # Create a conversation pointing to the git project
+        import server
+        server.sessions.create_conversation("conv_git", "Test", working_dir=str(project_dir))
+
+        async with test_client as client:
+            response = await client.get("/conversations", headers=headers)
+        convs = response.json()["conversations"]
+        conv = next(c for c in convs if c["id"] == "conv_git")
+        assert conv["git_branch"] == "feature"
+
+    @pytest.mark.asyncio
+    async def test_conversations_null_branch_for_non_git(self, test_client, headers, tmp_config_dir):
+        """Conversations without a git working_dir should have null git_branch."""
+        import server
+        server.sessions.create_conversation("conv_plain", "Test", working_dir=str(tmp_config_dir["projects_dir"]))
+
+        async with test_client as client:
+            response = await client.get("/conversations", headers=headers)
+        convs = response.json()["conversations"]
+        conv = next(c for c in convs if c["id"] == "conv_plain")
+        assert conv["git_branch"] is None
 
 
 class TestProjectsEndpoint:
@@ -189,6 +229,28 @@ class TestProjectsEndpoint:
             response = await client.post("/projects", json={"name": "Test"})
         assert response.status_code == 401
 
+    @pytest.mark.asyncio
+    async def test_projects_include_git_branch(self, test_client, headers, tmp_config_dir):
+        project_dir = tmp_config_dir["projects_dir"] / "GitProject"
+        project_dir.mkdir()
+        _init_git_repo(project_dir, branch="develop")
+
+        async with test_client as client:
+            response = await client.get("/projects", headers=headers)
+        projects = response.json()["projects"]
+        git_project = next(p for p in projects if p["name"] == "GitProject")
+        assert git_project["git_branch"] == "develop"
+
+    @pytest.mark.asyncio
+    async def test_non_git_project_has_null_branch(self, test_client, headers, tmp_config_dir):
+        (tmp_config_dir["projects_dir"] / "PlainDir").mkdir()
+
+        async with test_client as client:
+            response = await client.get("/projects", headers=headers)
+        projects = response.json()["projects"]
+        plain = next(p for p in projects if p["name"] == "PlainDir")
+        assert plain["git_branch"] is None
+
 
 class TestUploadEndpoint:
     @pytest.mark.asyncio
@@ -231,6 +293,21 @@ class TestUploadEndpoint:
                 "/upload?conversation_id=conv_1",
                 files={"file": ("photo.jpg", b"\xff\xd8", "image/jpeg")},
             )
+        assert response.status_code == 401
+
+
+class TestActiveConversationsEndpoint:
+    @pytest.mark.asyncio
+    async def test_active_conversations_empty(self, test_client, headers):
+        async with test_client as client:
+            response = await client.get("/conversations/active", headers=headers)
+        assert response.status_code == 200
+        assert response.json()["active_conversation_ids"] == []
+
+    @pytest.mark.asyncio
+    async def test_active_conversations_requires_auth(self, test_client):
+        async with test_client as client:
+            response = await client.get("/conversations/active")
         assert response.status_code == 401
 
 

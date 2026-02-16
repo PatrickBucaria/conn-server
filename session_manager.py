@@ -17,6 +17,9 @@ class Conversation:
     created_at: str = ""
     last_message_at: str = ""
     working_dir: str | None = None
+    allowed_tools: list[str] | None = None
+    git_worktree_path: str | None = None
+    original_working_dir: str | None = None
 
 
 class SessionManager:
@@ -44,7 +47,7 @@ class SessionManager:
             reverse=True,
         )
 
-    def create_conversation(self, conversation_id: str, name: str, working_dir: str | None = None) -> Conversation:
+    def create_conversation(self, conversation_id: str, name: str, working_dir: str | None = None, allowed_tools: list[str] | None = None) -> Conversation:
         now = _iso_now()
         conv = Conversation(
             id=conversation_id,
@@ -52,6 +55,7 @@ class SessionManager:
             created_at=now,
             last_message_at=now,
             working_dir=working_dir,
+            allowed_tools=allowed_tools,
         )
         self._conversations[conversation_id] = conv
         self._save()
@@ -66,6 +70,23 @@ class SessionManager:
             conv.claude_session_id = claude_session_id
             conv.last_message_at = _iso_now()
             self._save()
+
+    def update_allowed_tools(self, conversation_id: str, allowed_tools: list[str]) -> bool:
+        conv = self._conversations.get(conversation_id)
+        if conv:
+            conv.allowed_tools = allowed_tools
+            self._save()
+            return True
+        return False
+
+    def update_worktree(self, conversation_id: str, worktree_path: str | None, original_dir: str | None) -> bool:
+        conv = self._conversations.get(conversation_id)
+        if conv:
+            conv.git_worktree_path = worktree_path
+            conv.original_working_dir = original_dir
+            self._save()
+            return True
+        return False
 
     def rename_conversation(self, conversation_id: str, new_name: str):
         conv = self._conversations.get(conversation_id)
