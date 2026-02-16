@@ -8,6 +8,7 @@ import os
 import shutil
 import signal
 import time
+import typing
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -18,6 +19,7 @@ from starlette.websockets import WebSocketState
 from auth import verify_token
 from config import load_config, get_working_dir, UPLOADS_DIR, LOG_DIR, WORKING_DIR
 from git_utils import get_current_branch, is_git_repo, create_worktree, remove_worktree
+from preview_manager import PreviewManager
 from session_manager import SessionManager
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -28,6 +30,10 @@ active_processes: dict[str, asyncio.subprocess.Process] = {}
 conversation_locks: dict[str, asyncio.Lock] = {}
 start_time: float = 0
 sessions = SessionManager()
+previews = PreviewManager()
+
+# Track connected WebSocket clients for broadcasting events
+connected_clients: list[WebSocket] = []
 
 
 def _get_conversation_lock(conversation_id: str) -> asyncio.Lock:
@@ -44,7 +50,8 @@ async def lifespan(app: FastAPI):
     config = load_config()
     logger.info(f"Server starting — token: {config['auth_token'][:8]}...")
     yield
-    logger.info("Server shutting down")
+    logger.info("Server shutting down — stopping preview servers")
+    await previews.stop_all()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -85,6 +92,8 @@ async def delete_conversation(conversation_id: str, authorization: str = Header(
     if conv and conv.git_worktree_path and conv.original_working_dir:
         remove_worktree(conv.original_working_dir, conversation_id)
         logger.info(f"Cleaned up worktree for conversation {conversation_id}")
+    # Stop any preview server for this conversation
+    await previews.stop(conversation_id)
     if sessions.delete_conversation(conversation_id):
         # Clean up uploaded images for this conversation
         conv_uploads = UPLOADS_DIR / conversation_id
@@ -195,6 +204,9 @@ async def restart_server(authorization: str = Header(None)):
 
     logger.info("Restart requested — shutting down gracefully")
 
+    # Stop all preview servers
+    await previews.stop_all()
+
     # Cancel all active Claude subprocesses
     await _cancel_all_processes()
 
@@ -270,6 +282,84 @@ async def _wait_deploy(proc: asyncio.subprocess.Process, log_file: Path):
         logger.error(f"Deploy failed with exit code {proc.returncode} (log: {log_file})")
 
 
+class PreviewStartRequest(BaseModel):
+    conversation_id: str
+    command: typing.Optional[typing.List[str]] = None
+
+
+class PreviewStopRequest(BaseModel):
+    conversation_id: str
+
+
+@app.get("/preview/check/{conversation_id}")
+async def check_preview(conversation_id: str, authorization: str = Header(None)):
+    """Check if a conversation's project directory is previewable."""
+    _verify_rest_auth(authorization)
+    conv = sessions.get_conversation(conversation_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    working_dir = conv.working_dir or get_working_dir()
+    return {"previewable": PreviewManager.can_preview(working_dir)}
+
+
+@app.post("/preview/start")
+async def start_preview(request: PreviewStartRequest, authorization: str = Header(None)):
+    """Start a dev server for the given conversation's project directory."""
+    _verify_rest_auth(authorization)
+
+    conv = sessions.get_conversation(request.conversation_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    working_dir = conv.working_dir or get_working_dir()
+
+    try:
+        info = await previews.start(
+            conversation_id=request.conversation_id,
+            working_dir=working_dir,
+            command=request.command,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # Broadcast preview_available to all connected WebSocket clients
+    preview_event = {
+        "type": "preview_available",
+        "conversation_id": request.conversation_id,
+        "port": info.port,
+    }
+    for ws in connected_clients:
+        await _send(ws, preview_event)
+
+    return {"port": info.port}
+
+
+@app.post("/preview/stop")
+async def stop_preview(request: PreviewStopRequest, authorization: str = Header(None)):
+    """Stop the preview server for a conversation."""
+    _verify_rest_auth(authorization)
+    stopped = await previews.stop(request.conversation_id)
+    if not stopped:
+        raise HTTPException(status_code=404, detail="No preview running for this conversation")
+
+    # Broadcast preview_stopped to all connected WebSocket clients
+    stop_event = {
+        "type": "preview_stopped",
+        "conversation_id": request.conversation_id,
+    }
+    for ws in connected_clients:
+        await _send(ws, stop_event)
+
+    return {"stopped": True}
+
+
+@app.get("/preview/status")
+async def preview_status(authorization: str = Header(None)):
+    """List all active preview servers."""
+    _verify_rest_auth(authorization)
+    return {"previews": previews.list_previews()}
+
+
 def _verify_rest_auth(authorization: str | None):
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
@@ -294,6 +384,7 @@ async def ws_chat(websocket: WebSocket):
             if msg_type == "auth":
                 if verify_token(msg.get("token", "")):
                     authenticated = True
+                    connected_clients.append(websocket)
                     await _send(websocket, {"type": "auth_ok"})
                     logger.info("Client authenticated")
                 else:
@@ -322,6 +413,9 @@ async def ws_chat(websocket: WebSocket):
         logger.info("Client disconnected")
     except Exception as e:
         logger.exception(f"WebSocket error: {e}")
+    finally:
+        if websocket in connected_clients:
+            connected_clients.remove(websocket)
 
 
 def _build_prompt(text: str, image_paths: list[str]) -> str:
@@ -536,7 +630,18 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
         "The user is communicating with you remotely via ClaudeRemote, "
         "an Android app that connects to this machine over the local network. "
         "They cannot see your full terminal output or interact with files directly. "
-        "Keep responses concise and focused on actionable results.",
+        "Keep responses concise and focused on actionable results.\n\n"
+        "WEB APP PREVIEW — CRITICAL RULES:\n"
+        "1. NEVER start long-running dev servers via the Bash tool. "
+        "Running 'npm run dev', 'python -m http.server', 'flask run', 'npx vite', "
+        "or ANY process that doesn't exit will hang your Bash tool forever and freeze the conversation.\n"
+        "2. You CAN use Bash for short-lived build commands: npm install, npm run build, pip install, etc.\n"
+        "3. When you finish building or modifying a web app, tell the user: "
+        "\"The app is ready! Tap the menu (three dots) in the top right and select 'Start Preview' to view it in your browser.\"\n"
+        "4. The ClaudeRemote server will auto-detect the project type (Vite, npm, Django, Flask, static HTML) "
+        "and start the right dev server on a free port. You do not need to configure anything.\n"
+        "5. If the user asks you to 'run it', 'start the server', 'show me the app', or 'deploy it', "
+        "remind them to use the Start Preview button instead of trying to run a server yourself.",
     ]
 
     if session_id:
