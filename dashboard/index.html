@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ClaudeRemote Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Auth Screen -->
+    <div id="auth-screen" class="auth-screen">
+        <div class="auth-card">
+            <h1>ClaudeRemote</h1>
+            <p>Enter your server auth token to connect.</p>
+            <input type="password" id="token-input" placeholder="Auth token" autocomplete="off">
+            <button id="auth-btn" onclick="authenticate()">Connect</button>
+            <div id="auth-error" class="error-text"></div>
+        </div>
+    </div>
+
+    <!-- Dashboard -->
+    <div id="dashboard" class="dashboard hidden">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-left">
+                <h1>ClaudeRemote</h1>
+            </div>
+            <div class="header-right">
+                <div class="status-badges">
+                    <span id="health-badge" class="badge">--</span>
+                    <span id="agents-badge" class="badge">0 agents</span>
+                    <span id="ws-badge" class="badge badge-disconnected">WS: disconnected</span>
+                </div>
+                <button class="btn-small" onclick="logout()">Logout</button>
+            </div>
+        </header>
+
+        <div class="main-layout">
+            <!-- Sidebar -->
+            <aside class="sidebar">
+                <div class="sidebar-header">
+                    <h2>Conversations</h2>
+                    <span id="conv-count" class="count-badge">0</span>
+                </div>
+                <div id="conversation-list" class="conversation-list"></div>
+            </aside>
+
+            <!-- Chat View -->
+            <main class="chat-view">
+                <div id="chat-placeholder" class="chat-placeholder">
+                    <p>Select a conversation to view its history</p>
+                </div>
+                <div id="chat-container" class="chat-container hidden">
+                    <div class="chat-header">
+                        <div class="chat-title-row">
+                            <h2 id="chat-title">--</h2>
+                            <span id="chat-status" class="chat-status"></span>
+                        </div>
+                        <div class="chat-meta">
+                            <span id="chat-project"></span>
+                            <span id="chat-branch"></span>
+                            <span id="chat-tools"></span>
+                        </div>
+                    </div>
+                    <div id="chat-messages" class="chat-messages"></div>
+                    <div id="streaming-area" class="streaming-area hidden">
+                        <div class="streaming-label">Streaming...</div>
+                        <div id="streaming-text" class="streaming-text"></div>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

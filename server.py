@@ -14,6 +14,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Header, HTTPException, UploadFile, File, Query
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from starlette.websockets import WebSocketState
 
 from auth import verify_token
@@ -55,6 +57,16 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+# ---------- Dashboard static files ----------
+
+DASHBOARD_DIR = Path(__file__).parent / "dashboard"
+
+
+@app.get("/")
+async def root():
+    """Redirect root to dashboard."""
+    return FileResponse(DASHBOARD_DIR / "index.html")
 
 
 # ---------- REST endpoints ----------
@@ -641,7 +653,16 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
         "4. The ClaudeRemote server will auto-detect the project type (Vite, npm, Django, Flask, static HTML) "
         "and start the right dev server on a free port. You do not need to configure anything.\n"
         "5. If the user asks you to 'run it', 'start the server', 'show me the app', or 'deploy it', "
-        "remind them to use the Start Preview button instead of trying to run a server yourself.",
+        "remind them to use the Start Preview button instead of trying to run a server yourself.\n\n"
+        "QUESTIONS — CRITICAL RULE:\n"
+        "NEVER use the AskUserQuestion tool — it is not supported in this environment and will fail silently. "
+        "Instead, when you need to ask the user a question or present choices, write them directly in your "
+        "response text as numbered options. For example:\n"
+        "\"Which approach do you prefer?\n"
+        "1. Option A — description\n"
+        "2. Option B — description\n"
+        "3. Option C — description\"\n"
+        "The user will reply with their choice number or a custom answer.",
     ]
 
     if session_id:
@@ -1052,6 +1073,10 @@ async def _send(websocket: WebSocket, data: dict):
         await websocket.send_text(payload)
     except (WebSocketDisconnect, RuntimeError):
         pass
+
+
+# Mount dashboard static files (after all routes to avoid path conflicts)
+app.mount("/dashboard", StaticFiles(directory=str(DASHBOARD_DIR), html=True), name="dashboard")
 
 
 if __name__ == "__main__":
