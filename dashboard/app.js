@@ -198,6 +198,13 @@ function handleWsMessage(msg) {
             updateConvItemStatus(msg.conversation_id, false);
             break;
 
+        case 'ping':
+            // Respond to server keepalive pings
+            if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+                state.ws.send(JSON.stringify({ type: 'pong' }));
+            }
+            break;
+
         case 'error':
             console.error('Server error:', msg.detail);
             break;

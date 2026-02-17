@@ -382,10 +382,33 @@ def _verify_rest_auth(authorization: str | None):
 
 # ---------- WebSocket endpoint ----------
 
+
+async def _safe_handle(websocket: WebSocket, coro):
+    """Run a handler coroutine as a background task, logging any errors."""
+    try:
+        await coro
+    except Exception as e:
+        logger.exception(f"Background handler error: {e}")
+        try:
+            await _send(websocket, {"type": "error", "detail": str(e)})
+        except Exception:
+            pass  # Client may have disconnected
+
+
 @app.websocket("/ws/chat")
 async def ws_chat(websocket: WebSocket):
     await websocket.accept()
     authenticated = False
+    ping_task: asyncio.Task | None = None
+
+    async def _ping_loop():
+        """Send periodic pings to keep the connection alive and detect dead clients."""
+        try:
+            while True:
+                await asyncio.sleep(15)
+                await _send(websocket, {"type": "ping"})
+        except (WebSocketDisconnect, RuntimeError, asyncio.CancelledError):
+            pass
 
     try:
         while True:
@@ -398,6 +421,7 @@ async def ws_chat(websocket: WebSocket):
                     authenticated = True
                     connected_clients.append(websocket)
                     await _send(websocket, {"type": "auth_ok"})
+                    ping_task = asyncio.create_task(_ping_loop())
                     logger.info("Client authenticated")
                 else:
                     await _send(websocket, {"type": "error", "detail": "Invalid token"})
@@ -410,8 +434,14 @@ async def ws_chat(websocket: WebSocket):
                 await websocket.close(code=4001, reason="Not authenticated")
                 return
 
+            # Client pong responses — just ignore them
+            if msg_type == "pong":
+                continue
+
             if msg_type == "message":
-                await _handle_message(websocket, msg)
+                # Dispatch as background task so the receive loop stays free
+                # for other conversations' messages and cancel requests.
+                asyncio.create_task(_safe_handle(websocket, _handle_message(websocket, msg)))
             elif msg_type == "new_conversation":
                 await _handle_new_conversation(websocket, msg)
             elif msg_type == "update_permissions":
@@ -426,6 +456,8 @@ async def ws_chat(websocket: WebSocket):
     except Exception as e:
         logger.exception(f"WebSocket error: {e}")
     finally:
+        if ping_task:
+            ping_task.cancel()
         if websocket in connected_clients:
             connected_clients.remove(websocket)
 
