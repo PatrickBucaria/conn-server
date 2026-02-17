@@ -1,7 +1,7 @@
-// ClaudeRemote Dashboard — Read-Only Monitoring
+// Helm Dashboard — Read-Only Monitoring
 
 const state = {
-    token: localStorage.getItem('claude_remote_token') || '',
+    token: localStorage.getItem('helm_token') || '',
     conversations: [],
     activeIds: new Set(),
     selectedId: null,
@@ -22,7 +22,7 @@ function authenticate() {
     if (!token) return;
 
     state.token = token;
-    localStorage.setItem('claude_remote_token', token);
+    localStorage.setItem('helm_token', token);
 
     // Test the token with a health + conversations call
     fetchJSON('/conversations').then(() => {
@@ -30,13 +30,13 @@ function authenticate() {
     }).catch(() => {
         document.getElementById('auth-error').textContent = 'Invalid token or server unreachable';
         state.token = '';
-        localStorage.removeItem('claude_remote_token');
+        localStorage.removeItem('helm_token');
     });
 }
 
 function logout() {
     state.token = '';
-    localStorage.removeItem('claude_remote_token');
+    localStorage.removeItem('helm_token');
     if (state.ws) state.ws.close();
     clearInterval(state.pollTimer);
     document.getElementById('dashboard').classList.add('hidden');
@@ -500,6 +500,6 @@ if (state.token) {
     }).catch(() => {
         // Token invalid, show auth screen
         state.token = '';
-        localStorage.removeItem('claude_remote_token');
+        localStorage.removeItem('helm_token');
     });
 }

@@ -1,4 +1,4 @@
-"""Shared test fixtures for the ClaudeRemote server test suite."""
+"""Shared test fixtures for the Helm server test suite."""
 
 import json
 import os

@@ -249,7 +249,7 @@ async def deploy_build(authorization: str = Header(None)):
     if deploy_process and deploy_process.returncode is None:
         raise HTTPException(status_code=409, detail="Deploy already in progress")
 
-    script = Path.home() / "Projects" / "ClaudeRemote" / "scripts" / "build-and-distribute-android.sh"
+    script = Path.home() / "Projects" / "ClaudeRemote" / "scripts" / "build-and-distribute.sh"
     if not script.exists():
         raise HTTPException(status_code=500, detail="Build script not found")
 
@@ -259,7 +259,7 @@ async def deploy_build(authorization: str = Header(None)):
 
     with open(log_file, "w") as f:
         deploy_process = await asyncio.create_subprocess_exec(
-            str(script), "clauderemote", "Deployed from ClaudeRemote app",
+            str(script), "helm", "Deployed from Helm",
             stdout=f,
             stderr=asyncio.subprocess.STDOUT,
             cwd=str(script.parent.parent),
@@ -790,7 +790,7 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
         "--max-turns", "50",
         "--verbose",
         "--append-system-prompt",
-        "The user is communicating with you remotely via ClaudeRemote, "
+        "The user is communicating with you remotely via Helm, "
         "an Android app that connects to this machine over the local network. "
         "They cannot see your full terminal output or interact with files directly. "
         "Keep responses concise and focused on actionable results.\n\n"
@@ -801,7 +801,7 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
         "2. You CAN use Bash for short-lived build commands: npm install, npm run build, pip install, etc.\n"
         "3. When you finish building or modifying a web app, tell the user: "
         "\"The app is ready! Tap the menu (three dots) in the top right and select 'Start Preview' to view it in your browser.\"\n"
-        "4. The ClaudeRemote server will auto-detect the project type (Vite, npm, Django, Flask, static HTML) "
+        "4. The Helm server will auto-detect the project type (Vite, npm, Django, Flask, static HTML) "
         "and start the right dev server on a free port. You do not need to configure anything.\n"
         "5. If the user asks you to 'run it', 'start the server', 'show me the app', or 'deploy it', "
         "remind them to use the Start Preview button instead of trying to run a server yourself.\n\n"
@@ -974,7 +974,7 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
             # Include branch info for worktree conversations
             conv_info = sessions.get_conversation(conversation_id)
             if conv_info and conv_info.git_worktree_path:
-                complete_msg["git_branch"] = f"claude-remote/{conversation_id}"
+                complete_msg["git_branch"] = f"helm/{conversation_id}"
             await _send(websocket, complete_msg)
 
         # Generate AI summary for new conversations (first turn only)
