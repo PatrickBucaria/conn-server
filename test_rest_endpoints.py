@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 from httpx import AsyncClient, ASGITransport
 
+from mcp_config import McpConfigManager
 from server import app
 from session_manager import SessionManager
 
@@ -27,7 +28,8 @@ def test_client(tmp_config_dir):
     """Create an async test client with patched config."""
     # Also patch the global sessions object in server module.
     # Must use yield (not return) so the patch stays active during the test.
-    with patch("server.sessions", SessionManager()):
+    with patch("server.sessions", SessionManager()), \
+         patch("server.mcp_servers", McpConfigManager()):
         transport = ASGITransport(app=app)
         yield AsyncClient(transport=transport, base_url="http://test")
 
@@ -317,3 +319,133 @@ class TestRestartEndpoint:
         async with test_client as client:
             response = await client.post("/restart")
         assert response.status_code == 401
+
+
+class TestMcpServersEndpoint:
+    @pytest.mark.asyncio
+    async def test_list_mcp_servers_empty(self, test_client, headers):
+        async with test_client as client:
+            response = await client.get("/mcp/servers", headers=headers)
+        assert response.status_code == 200
+        assert response.json()["servers"] == []
+
+    @pytest.mark.asyncio
+    async def test_list_mcp_servers_requires_auth(self, test_client):
+        async with test_client as client:
+            response = await client.get("/mcp/servers")
+        assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_add_stdio_server(self, test_client, headers):
+        async with test_client as client:
+            response = await client.post("/mcp/servers", headers=headers, json={
+                "name": "sentry",
+                "display_name": "Sentry",
+                "transport": "stdio",
+                "command": "npx",
+                "args": ["-y", "@sentry/mcp-server"],
+                "env": {"SENTRY_TOKEN": "secret"},
+            })
+        assert response.status_code == 200
+        assert response.json()["server"] == "sentry"
+
+    @pytest.mark.asyncio
+    async def test_add_http_server(self, test_client, headers):
+        async with test_client as client:
+            response = await client.post("/mcp/servers", headers=headers, json={
+                "name": "github",
+                "display_name": "GitHub",
+                "transport": "http",
+                "url": "https://api.github.com/mcp/",
+            })
+        assert response.status_code == 200
+        assert response.json()["server"] == "github"
+
+    @pytest.mark.asyncio
+    async def test_add_server_invalid_name(self, test_client, headers):
+        async with test_client as client:
+            response = await client.post("/mcp/servers", headers=headers, json={
+                "name": "bad name!",
+                "transport": "stdio",
+                "command": "cmd",
+            })
+        assert response.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_add_duplicate_server(self, test_client, headers):
+        async with test_client as client:
+            await client.post("/mcp/servers", headers=headers, json={
+                "name": "test", "transport": "stdio", "command": "cmd",
+            })
+            response = await client.post("/mcp/servers", headers=headers, json={
+                "name": "test", "transport": "stdio", "command": "cmd",
+            })
+        assert response.status_code == 400
+        assert "already exists" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_add_and_list_masks_env(self, test_client, headers):
+        async with test_client as client:
+            await client.post("/mcp/servers", headers=headers, json={
+                "name": "test", "transport": "stdio", "command": "cmd",
+                "env": {"TOKEN": "sk-super-secret-key"},
+            })
+            response = await client.get("/mcp/servers", headers=headers)
+        servers = response.json()["servers"]
+        assert len(servers) == 1
+        assert servers[0]["env"]["TOKEN"] == "sk-s...-key"
+
+    @pytest.mark.asyncio
+    async def test_delete_server(self, test_client, headers):
+        async with test_client as client:
+            await client.post("/mcp/servers", headers=headers, json={
+                "name": "test", "transport": "stdio", "command": "cmd",
+            })
+            response = await client.delete("/mcp/servers/test", headers=headers)
+        assert response.status_code == 200
+        assert response.json()["deleted"] == "test"
+
+    @pytest.mark.asyncio
+    async def test_delete_server_not_found(self, test_client, headers):
+        async with test_client as client:
+            response = await client.delete("/mcp/servers/nonexistent", headers=headers)
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_toggle_server(self, test_client, headers):
+        async with test_client as client:
+            await client.post("/mcp/servers", headers=headers, json={
+                "name": "test", "transport": "stdio", "command": "cmd",
+            })
+            response = await client.post("/mcp/servers/test/toggle", headers=headers, json={
+                "enabled": False,
+            })
+        assert response.status_code == 200
+        assert response.json()["enabled"] is False
+
+    @pytest.mark.asyncio
+    async def test_toggle_server_not_found(self, test_client, headers):
+        async with test_client as client:
+            response = await client.post("/mcp/servers/nonexistent/toggle", headers=headers, json={
+                "enabled": True,
+            })
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_update_server(self, test_client, headers):
+        async with test_client as client:
+            await client.post("/mcp/servers", headers=headers, json={
+                "name": "test", "transport": "stdio", "command": "cmd",
+            })
+            response = await client.put("/mcp/servers/test", headers=headers, json={
+                "name": "test", "display_name": "Updated", "transport": "stdio", "command": "new-cmd",
+            })
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_update_server_not_found(self, test_client, headers):
+        async with test_client as client:
+            response = await client.put("/mcp/servers/nonexistent", headers=headers, json={
+                "name": "nonexistent", "transport": "stdio", "command": "cmd",
+            })
+        assert response.status_code == 404

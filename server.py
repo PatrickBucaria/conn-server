@@ -21,6 +21,7 @@ from starlette.websockets import WebSocketState
 from auth import verify_token
 from config import load_config, get_working_dir, UPLOADS_DIR, LOG_DIR, WORKING_DIR
 from git_utils import get_current_branch, is_git_repo, create_worktree, remove_worktree
+from mcp_config import McpConfigManager
 from preview_manager import PreviewManager
 from session_manager import SessionManager
 
@@ -33,6 +34,7 @@ conversation_locks: dict[str, asyncio.Lock] = {}
 start_time: float = 0
 sessions = SessionManager()
 previews = PreviewManager()
+mcp_servers = McpConfigManager()
 
 # Track connected WebSocket clients for broadcasting events
 connected_clients: list[WebSocket] = []
@@ -372,6 +374,92 @@ async def preview_status(authorization: str = Header(None)):
     return {"previews": previews.list_previews()}
 
 
+# ---------- MCP server management endpoints ----------
+
+
+class McpServerRequest(BaseModel):
+    name: str
+    display_name: str = ""
+    transport: str = "stdio"
+    command: typing.Optional[str] = None
+    args: typing.Optional[typing.List[str]] = None
+    url: typing.Optional[str] = None
+    headers: typing.Optional[typing.Dict[str, str]] = None
+    env: typing.Optional[typing.Dict[str, str]] = None
+    enabled: bool = True
+
+
+class McpServerToggleRequest(BaseModel):
+    enabled: bool
+
+
+@app.get("/mcp/servers")
+async def list_mcp_servers(authorization: str = Header(None)):
+    """List all configured MCP servers (env values masked)."""
+    _verify_rest_auth(authorization)
+    return {"servers": mcp_servers.list_servers()}
+
+
+@app.post("/mcp/servers")
+async def add_mcp_server(request: McpServerRequest, authorization: str = Header(None)):
+    """Add a new MCP server."""
+    _verify_rest_auth(authorization)
+    from mcp_config import McpServer
+    server = McpServer(
+        name=request.name,
+        display_name=request.display_name or request.name,
+        transport=request.transport,
+        command=request.command,
+        args=request.args,
+        url=request.url,
+        headers=request.headers,
+        env=request.env,
+        enabled=request.enabled,
+    )
+    try:
+        mcp_servers.add_server(server)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    logger.info(f"Added MCP server: {server.name} ({server.transport})")
+    return {"server": request.name}
+
+
+@app.put("/mcp/servers/{name}")
+async def update_mcp_server(name: str, request: McpServerRequest, authorization: str = Header(None)):
+    """Update an existing MCP server."""
+    _verify_rest_auth(authorization)
+    updates = request.model_dump(exclude_none=True)
+    updates.pop("name", None)
+    try:
+        server = mcp_servers.update_server(name, updates)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not server:
+        raise HTTPException(status_code=404, detail="MCP server not found")
+    logger.info(f"Updated MCP server: {name}")
+    return {"server": name}
+
+
+@app.delete("/mcp/servers/{name}")
+async def delete_mcp_server(name: str, authorization: str = Header(None)):
+    """Remove an MCP server."""
+    _verify_rest_auth(authorization)
+    if mcp_servers.remove_server(name):
+        logger.info(f"Removed MCP server: {name}")
+        return {"deleted": name}
+    raise HTTPException(status_code=404, detail="MCP server not found")
+
+
+@app.post("/mcp/servers/{name}/toggle")
+async def toggle_mcp_server(name: str, request: McpServerToggleRequest, authorization: str = Header(None)):
+    """Enable or disable an MCP server globally."""
+    _verify_rest_auth(authorization)
+    if mcp_servers.toggle_server(name, request.enabled):
+        logger.info(f"Toggled MCP server {name}: enabled={request.enabled}")
+        return {"name": name, "enabled": request.enabled}
+    raise HTTPException(status_code=404, detail="MCP server not found")
+
+
 def _verify_rest_auth(authorization: str | None):
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
@@ -446,6 +534,8 @@ async def ws_chat(websocket: WebSocket):
                 await _handle_new_conversation(websocket, msg)
             elif msg_type == "update_permissions":
                 await _handle_update_permissions(websocket, msg)
+            elif msg_type == "update_mcp_servers":
+                await _handle_update_mcp_servers(websocket, msg)
             elif msg_type == "cancel":
                 await _handle_cancel(websocket, msg)
             else:
@@ -554,8 +644,9 @@ async def _handle_new_conversation(websocket: WebSocket, msg: dict):
     conversation_id = msg.get("conversation_id", f"conv_{int(time.time())}")
     working_dir = msg.get("working_dir")
     allowed_tools = msg.get("allowed_tools")
+    mcp_server_names = msg.get("mcp_servers")
 
-    conv = sessions.create_conversation(conversation_id, name, working_dir=working_dir, allowed_tools=allowed_tools)
+    conv = sessions.create_conversation(conversation_id, name, working_dir=working_dir, allowed_tools=allowed_tools, mcp_servers=mcp_server_names)
 
     # Check if worktree isolation is needed
     if working_dir and is_git_repo(working_dir):
@@ -619,6 +710,32 @@ async def _handle_update_permissions(websocket: WebSocket, msg: dict):
         await _send(websocket, {"type": "error", "detail": "Conversation not found"})
 
 
+async def _handle_update_mcp_servers(websocket: WebSocket, msg: dict):
+    """Update MCP servers for an existing conversation."""
+    conversation_id = msg.get("conversation_id", "")
+    mcp_server_names = msg.get("mcp_servers", [])
+
+    if not conversation_id:
+        await _send(websocket, {"type": "error", "detail": "Missing conversation_id"})
+        return
+
+    # Validate that all requested servers actually exist
+    known = set(mcp_servers.get_server_names())
+    unknown = set(mcp_server_names) - known
+    if unknown:
+        await _send(websocket, {"type": "error", "detail": f"Unknown MCP servers: {unknown}"})
+        return
+
+    if sessions.update_mcp_servers(conversation_id, mcp_server_names):
+        await _send(websocket, {
+            "type": "mcp_servers_updated",
+            "conversation_id": conversation_id,
+            "mcp_servers": mcp_server_names,
+        })
+    else:
+        await _send(websocket, {"type": "error", "detail": "Conversation not found"})
+
+
 async def _cancel_conversation_process(conversation_id: str) -> bool:
     """Terminate the active claude subprocess for a specific conversation."""
     proc = active_processes.get(conversation_id)
@@ -667,6 +784,7 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
     cmd = [
         "claude", "-p", text,
         "--output-format", "stream-json",
+        "--tools", tools,
         "--allowedTools", tools,
         "--max-turns", "50",
         "--verbose",
@@ -696,6 +814,14 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
         "3. Option C — description\"\n"
         "The user will reply with their choice number or a custom answer.",
     ]
+
+    # Generate --mcp-config file if conversation has MCP servers enabled
+    mcp_config_path = None
+    if conv and conv.mcp_servers:
+        mcp_config_path = mcp_servers.write_mcp_config_file(conv.mcp_servers)
+        if mcp_config_path:
+            cmd.extend(["--mcp-config", mcp_config_path])
+            logger.info(f"MCP config: {conv.mcp_servers} → {mcp_config_path}")
 
     if session_id:
         cmd.extend(["--resume", session_id])
@@ -858,6 +984,12 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
             await _send(websocket, {"type": "error", "detail": str(e)})
     finally:
         active_processes.pop(conversation_id, None)
+        # Clean up temp MCP config file
+        if mcp_config_path:
+            try:
+                os.unlink(mcp_config_path)
+            except OSError:
+                pass
         # Clean up lock if no longer held
         lock = conversation_locks.get(conversation_id)
         if lock and not lock.locked():

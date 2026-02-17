@@ -18,6 +18,7 @@ def tmp_config_dir(tmp_path):
     log_dir = tmp_path / "logs"
     worktrees_dir = tmp_path / "worktrees"
     config_file = tmp_path / "config.json"
+    mcp_servers_file = tmp_path / "mcp_servers.json"
 
     history_dir.mkdir()
     uploads_dir.mkdir()
@@ -48,6 +49,7 @@ def tmp_config_dir(tmp_path):
          patch("config.WORKING_DIR", str(tmp_path / "projects")), \
          patch("session_manager.SESSIONS_FILE", sessions_file), \
          patch("session_manager.HISTORY_DIR", history_dir), \
+         patch("mcp_config.MCP_SERVERS_FILE", mcp_servers_file), \
          patch("server.UPLOADS_DIR", uploads_dir), \
          patch("server.LOG_DIR", log_dir), \
          patch("git_utils.WORKTREES_DIR", worktrees_dir):
@@ -58,6 +60,7 @@ def tmp_config_dir(tmp_path):
             "history_dir": history_dir,
             "uploads_dir": uploads_dir,
             "worktrees_dir": worktrees_dir,
+            "mcp_servers_file": mcp_servers_file,
             "projects_dir": tmp_path / "projects",
             "config_file": config_file,
         }
