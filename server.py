@@ -645,8 +645,9 @@ async def _handle_new_conversation(websocket: WebSocket, msg: dict):
     working_dir = msg.get("working_dir")
     allowed_tools = msg.get("allowed_tools")
     mcp_server_names = msg.get("mcp_servers")
+    model = msg.get("model")
 
-    conv = sessions.create_conversation(conversation_id, name, working_dir=working_dir, allowed_tools=allowed_tools, mcp_servers=mcp_server_names)
+    conv = sessions.create_conversation(conversation_id, name, working_dir=working_dir, allowed_tools=allowed_tools, mcp_servers=mcp_server_names, model=model)
 
     # Check if worktree isolation is needed
     if working_dir and is_git_repo(working_dir):
@@ -814,6 +815,10 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
         "3. Option C — description\"\n"
         "The user will reply with their choice number or a custom answer.",
     ]
+
+    # Add --model flag if conversation specifies a model
+    if conv and conv.model:
+        cmd.extend(["--model", conv.model])
 
     # Generate --mcp-config file if conversation has MCP servers enabled
     mcp_config_path = None

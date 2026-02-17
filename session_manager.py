@@ -21,6 +21,7 @@ class Conversation:
     mcp_servers: list[str] | None = None
     git_worktree_path: str | None = None
     original_working_dir: str | None = None
+    model: str | None = None
 
 
 class SessionManager:
@@ -48,7 +49,7 @@ class SessionManager:
             reverse=True,
         )
 
-    def create_conversation(self, conversation_id: str, name: str, working_dir: str | None = None, allowed_tools: list[str] | None = None, mcp_servers: list[str] | None = None) -> Conversation:
+    def create_conversation(self, conversation_id: str, name: str, working_dir: str | None = None, allowed_tools: list[str] | None = None, mcp_servers: list[str] | None = None, model: str | None = None) -> Conversation:
         now = _iso_now()
         conv = Conversation(
             id=conversation_id,
@@ -58,6 +59,7 @@ class SessionManager:
             working_dir=working_dir,
             allowed_tools=allowed_tools,
             mcp_servers=mcp_servers,
+            model=model,
         )
         self._conversations[conversation_id] = conv
         self._save()
