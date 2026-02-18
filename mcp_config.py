@@ -1,6 +1,6 @@
 """MCP (Model Context Protocol) server configuration management.
 
-Stores MCP server definitions in ~/.claude-remote/mcp_servers.json and
+Stores MCP server definitions in ~/.conn/mcp_servers.json and
 generates temporary --mcp-config files for Claude CLI invocations.
 """
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""Shared test fixtures for the Helm server test suite."""
+"""Shared test fixtures for the Conn server test suite."""
 
 import json
 import os

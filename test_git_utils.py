@@ -57,7 +57,7 @@ class TestCreateWorktree:
 
         # Verify the worktree is on the right branch
         branch = get_current_branch(wt_path)
-        assert branch == "helm/conv_123"
+        assert branch == "conn/conv_123"
 
     def test_returns_none_for_non_git_dir(self, tmp_path, tmp_config_dir):
         result = create_worktree(str(tmp_path), "conv_456")
@@ -70,7 +70,7 @@ class TestCreateWorktree:
 
         wt_path = create_worktree(str(repo), "conv_789", base_branch="develop")
         assert wt_path is not None
-        assert get_current_branch(wt_path) == "helm/conv_789"
+        assert get_current_branch(wt_path) == "conn/conv_789"
 
 
 class TestRemoveWorktree:
@@ -89,7 +89,7 @@ class TestRemoveWorktree:
 
         # Verify branch is deleted
         branch_check = subprocess.run(
-            ["git", "branch", "--list", "helm/conv_del"],
+            ["git", "branch", "--list", "conn/conv_del"],
             cwd=str(repo), capture_output=True, text=True,
         )
         assert branch_check.stdout.strip() == ""

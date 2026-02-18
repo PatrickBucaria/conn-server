@@ -1,10 +1,10 @@
-"""Load and manage server configuration from ~/.helm/config.json."""
+"""Load and manage server configuration from ~/.conn/config.json."""
 
 import json
 import secrets
 from pathlib import Path
 
-CONFIG_DIR = Path.home() / ".helm"
+CONFIG_DIR = Path.home() / ".conn"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 SESSIONS_FILE = CONFIG_DIR / "sessions.json"
 HISTORY_DIR = CONFIG_DIR / "history"

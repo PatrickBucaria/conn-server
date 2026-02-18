@@ -286,7 +286,7 @@ async def deploy_build(authorization: str = Header(None)):
     if deploy_process and deploy_process.returncode is None:
         raise HTTPException(status_code=409, detail="Deploy already in progress")
 
-    script = Path.home() / "Projects" / "Helm" / "scripts" / "build-and-distribute.sh"
+    script = Path.home() / "Projects" / "Conn" / "scripts" / "build-and-distribute.sh"
     if not script.exists():
         raise HTTPException(status_code=500, detail="Build script not found")
 
@@ -296,7 +296,7 @@ async def deploy_build(authorization: str = Header(None)):
 
     with open(log_file, "w") as f:
         deploy_process = await asyncio.create_subprocess_exec(
-            str(script), "helm", "Deployed from Helm",
+            str(script), "conn", "Deployed from Conn",
             stdout=f,
             stderr=asyncio.subprocess.STDOUT,
             cwd=str(script.parent.parent),
@@ -928,9 +928,9 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
     conv = sessions.get_conversation(conversation_id)
     use_agent = conv and conv.agent
 
-    # Helm-specific platform rules (appended regardless of agent)
-    helm_system_prompt = (
-        "The user is communicating with you remotely via Helm, "
+    # Conn-specific platform rules (appended regardless of agent)
+    conn_system_prompt = (
+        "The user is communicating with you remotely via Conn, "
         "an Android app that connects to this machine over the local network. "
         "They cannot see your full terminal output or interact with files directly. "
         "Keep responses concise and focused on actionable results.\n\n"
@@ -941,7 +941,7 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
         "2. You CAN use Bash for short-lived build commands: npm install, npm run build, pip install, etc.\n"
         "3. When you finish building or modifying a web app, tell the user: "
         "\"The app is ready! Tap the menu (three dots) in the top right and select 'Start Preview' to view it in your browser.\"\n"
-        "4. The Helm server will auto-detect the project type (Vite, npm, Django, Flask, static HTML) "
+        "4. The Conn server will auto-detect the project type (Vite, npm, Django, Flask, static HTML) "
         "and start the right dev server on a free port. You do not need to configure anything.\n"
         "5. If the user asks you to 'run it', 'start the server', 'show me the app', or 'deploy it', "
         "remind them to use the Start Preview button instead of trying to run a server yourself.\n\n"
@@ -958,14 +958,14 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
 
     if use_agent:
         # Agent mode: let the agent definition handle tools, model, permissions.
-        # Only append Helm platform rules.
+        # Only append Conn platform rules.
         cmd = [
             "claude", "-p", text,
             "--output-format", "stream-json",
             "--max-turns", "50",
             "--verbose",
             "--agent", conv.agent,
-            "--append-system-prompt", helm_system_prompt,
+            "--append-system-prompt", conn_system_prompt,
         ]
     else:
         # Manual mode: use per-conversation allowed tools
@@ -977,7 +977,7 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
             "--allowedTools", tools,
             "--max-turns", "50",
             "--verbose",
-            "--append-system-prompt", helm_system_prompt,
+            "--append-system-prompt", conn_system_prompt,
         ]
 
     # Add --model flag if conversation specifies a model (manual mode only;
@@ -1147,7 +1147,7 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
             # Include branch info for worktree conversations
             conv_info = sessions.get_conversation(conversation_id)
             if conv_info and conv_info.git_worktree_path:
-                complete_msg["git_branch"] = f"helm/{conversation_id}"
+                complete_msg["git_branch"] = f"conn/{conversation_id}"
             await _send(websocket, complete_msg)
 
         # Generate AI summary for new conversations (first turn only)
