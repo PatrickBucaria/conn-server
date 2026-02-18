@@ -249,7 +249,7 @@ async def deploy_build(authorization: str = Header(None)):
     if deploy_process and deploy_process.returncode is None:
         raise HTTPException(status_code=409, detail="Deploy already in progress")
 
-    script = Path.home() / "Projects" / "ClaudeRemote" / "scripts" / "build-and-distribute.sh"
+    script = Path.home() / "Projects" / "Helm" / "scripts" / "build-and-distribute.sh"
     if not script.exists():
         raise HTTPException(status_code=500, detail="Build script not found")
 
