@@ -833,6 +833,15 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
         mcp_config_path = mcp_servers.write_mcp_config_file(conv.mcp_servers)
         if mcp_config_path:
             cmd.extend(["--mcp-config", mcp_config_path])
+            # Auto-allow all tools from enabled MCP servers so they don't
+            # trigger interactive permission prompts on the terminal.
+            mcp_tool_patterns = [f"mcp__{name}__*" for name in conv.mcp_servers
+                                 if mcp_servers.get_server(name) and mcp_servers.get_server(name).enabled]
+            if mcp_tool_patterns:
+                tools_with_mcp = tools + "," + ",".join(mcp_tool_patterns)
+                # Replace --allowedTools in cmd with the expanded list
+                idx = cmd.index("--allowedTools")
+                cmd[idx + 1] = tools_with_mcp
             logger.info(f"MCP config: {conv.mcp_servers} → {mcp_config_path}")
 
     if session_id:
