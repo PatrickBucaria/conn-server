@@ -888,7 +888,7 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
     in_tool_use = False  # Track when we're inside a tool use block
     result_is_error = False
     saw_streaming_deltas = False  # Track if we got content_block_delta events
-    forwarder = EventForwarder()
+    forwarder = EventForwarder(cwd=cwd or get_working_dir())
 
     # Clear CLAUDECODE env var so claude doesn't think it's nested
     env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
@@ -1125,12 +1125,13 @@ class EventForwarder:
         "mcp__playwright__browser_take_screenshot",
     }
 
-    def __init__(self):
+    def __init__(self, cwd: str | None = None):
         self._saw_streaming_events = False  # Track if we got content_block events
         self._active_tool_name: str | None = None
         self._tool_input_json: str = ""  # Accumulated input_json_delta fragments
         self._tool_start_sent: bool = False  # Whether we sent the initial tool_start
         self.image_paths: list[str] = []  # Image file paths emitted during this response
+        self._cwd = cwd  # Working directory of the Claude subprocess
 
     async def forward(self, websocket: WebSocket, event: dict, conversation_id: str) -> dict | None:
         event_type = event.get("type")
@@ -1181,10 +1182,15 @@ class EventForwarder:
                 if self._active_tool_name in self.SCREENSHOT_TOOLS:
                     image_path = _extract_screenshot_path(self._tool_input_json)
                     if image_path:
-                        self.image_paths.append(image_path)
+                        # Resolve relative paths against the Claude subprocess cwd
+                        resolved = Path(image_path)
+                        if not resolved.is_absolute() and self._cwd:
+                            resolved = Path(self._cwd) / image_path
+                        abs_path = str(resolved.resolve())
+                        self.image_paths.append(abs_path)
                         await _send(websocket, {
                             "type": "image",
-                            "path": image_path,
+                            "path": abs_path,
                             "conversation_id": conversation_id,
                         })
 

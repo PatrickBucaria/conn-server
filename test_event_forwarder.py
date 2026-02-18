@@ -27,6 +27,12 @@ def forwarder():
     return EventForwarder()
 
 
+@pytest.fixture
+def forwarder_with_cwd(tmp_path):
+    """EventForwarder with a known cwd for screenshot path resolution."""
+    return EventForwarder(cwd=str(tmp_path)), tmp_path
+
+
 class TestTextDeltaForwarding:
     @pytest.mark.asyncio
     async def test_text_delta_forwarded(self, forwarder, mock_websocket):
@@ -390,7 +396,8 @@ class TestScreenshotImageEvent:
     """Tests for EventForwarder emitting image events on screenshot tools."""
 
     @pytest.mark.asyncio
-    async def test_screenshot_tool_emits_image_event(self, forwarder, mock_websocket):
+    async def test_screenshot_tool_emits_image_event(self, forwarder_with_cwd, mock_websocket):
+        fwd, tmp_path = forwarder_with_cwd
         ws, _ = mock_websocket
 
         # Start a screenshot tool with empty input
@@ -403,7 +410,7 @@ class TestScreenshotImageEvent:
             },
         }
         with patch("server._send", new_callable=AsyncMock):
-            await forwarder.forward(ws, start_event, "conv_1")
+            await fwd.forward(ws, start_event, "conv_1")
 
         # Stream tool input with filename
         delta_event = {
@@ -414,7 +421,7 @@ class TestScreenshotImageEvent:
             },
         }
         with patch("server._send", new_callable=AsyncMock):
-            await forwarder.forward(ws, delta_event, "conv_1")
+            await fwd.forward(ws, delta_event, "conv_1")
 
         # Stop the tool — should emit tool_start (if not sent), image, then tool_done
         stop_event = {"type": "content_block_stop"}
@@ -423,17 +430,19 @@ class TestScreenshotImageEvent:
             send_calls.append(data)
 
         with patch("server._send", side_effect=capture_send):
-            await forwarder.forward(ws, stop_event, "conv_1")
+            await fwd.forward(ws, stop_event, "conv_1")
 
         types = [c["type"] for c in send_calls]
         assert "image" in types
         image_msg = next(c for c in send_calls if c["type"] == "image")
-        assert image_msg["path"] == "page-screenshot.png"
+        # Path should be resolved to absolute using cwd
+        assert image_msg["path"] == str(tmp_path / "page-screenshot.png")
         assert image_msg["conversation_id"] == "conv_1"
         assert "tool_done" in types
 
     @pytest.mark.asyncio
-    async def test_screenshot_tool_tracks_image_paths(self, forwarder, mock_websocket):
+    async def test_screenshot_tool_tracks_image_paths(self, forwarder_with_cwd, mock_websocket):
+        fwd, tmp_path = forwarder_with_cwd
         ws, _ = mock_websocket
 
         # Start screenshot tool
@@ -446,7 +455,7 @@ class TestScreenshotImageEvent:
             },
         }
         with patch("server._send", new_callable=AsyncMock):
-            await forwarder.forward(ws, start_event, "conv_1")
+            await fwd.forward(ws, start_event, "conv_1")
 
         # Input with filename
         delta_event = {
@@ -457,13 +466,45 @@ class TestScreenshotImageEvent:
             },
         }
         with patch("server._send", new_callable=AsyncMock):
-            await forwarder.forward(ws, delta_event, "conv_1")
+            await fwd.forward(ws, delta_event, "conv_1")
 
         # Stop
         with patch("server._send", new_callable=AsyncMock):
-            await forwarder.forward(ws, {"type": "content_block_stop"}, "conv_1")
+            await fwd.forward(ws, {"type": "content_block_stop"}, "conv_1")
 
-        assert forwarder.image_paths == ["shot.png"]
+        assert fwd.image_paths == [str(tmp_path / "shot.png")]
+
+    @pytest.mark.asyncio
+    async def test_screenshot_absolute_path_unchanged(self, forwarder_with_cwd, mock_websocket):
+        """If the filename is already absolute, don't prepend cwd."""
+        fwd, tmp_path = forwarder_with_cwd
+        ws, _ = mock_websocket
+
+        start_event = {
+            "type": "content_block_start",
+            "content_block": {
+                "type": "tool_use",
+                "name": "mcp__playwright__browser_take_screenshot",
+                "input": {},
+            },
+        }
+        with patch("server._send", new_callable=AsyncMock):
+            await fwd.forward(ws, start_event, "conv_1")
+
+        delta_event = {
+            "type": "content_block_delta",
+            "delta": {
+                "type": "input_json_delta",
+                "partial_json": '{"filename": "/absolute/path/shot.png"}',
+            },
+        }
+        with patch("server._send", new_callable=AsyncMock):
+            await fwd.forward(ws, delta_event, "conv_1")
+
+        with patch("server._send", new_callable=AsyncMock):
+            await fwd.forward(ws, {"type": "content_block_stop"}, "conv_1")
+
+        assert fwd.image_paths == ["/absolute/path/shot.png"]
 
     @pytest.mark.asyncio
     async def test_non_screenshot_tool_no_image_event(self, forwarder, mock_websocket):
@@ -533,7 +574,8 @@ class TestScreenshotImageEvent:
         assert forwarder.image_paths == []
 
     @pytest.mark.asyncio
-    async def test_multiple_screenshots_tracked(self, forwarder, mock_websocket):
+    async def test_multiple_screenshots_tracked(self, forwarder_with_cwd, mock_websocket):
+        fwd, tmp_path = forwarder_with_cwd
         ws, _ = mock_websocket
 
         for filename in ["shot1.png", "shot2.png"]:
@@ -546,7 +588,7 @@ class TestScreenshotImageEvent:
                 },
             }
             with patch("server._send", new_callable=AsyncMock):
-                await forwarder.forward(ws, start_event, "conv_1")
+                await fwd.forward(ws, start_event, "conv_1")
 
             delta_event = {
                 "type": "content_block_delta",
@@ -556,9 +598,9 @@ class TestScreenshotImageEvent:
                 },
             }
             with patch("server._send", new_callable=AsyncMock):
-                await forwarder.forward(ws, delta_event, "conv_1")
+                await fwd.forward(ws, delta_event, "conv_1")
 
             with patch("server._send", new_callable=AsyncMock):
-                await forwarder.forward(ws, {"type": "content_block_stop"}, "conv_1")
+                await fwd.forward(ws, {"type": "content_block_stop"}, "conv_1")
 
-        assert forwarder.image_paths == ["shot1.png", "shot2.png"]
+        assert fwd.image_paths == [str(tmp_path / "shot1.png"), str(tmp_path / "shot2.png")]
