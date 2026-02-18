@@ -1251,13 +1251,31 @@ class EventForwarder:
                     await _send(websocket, out)
                     last_out = out
                 elif block.get("type") == "tool_use":
+                    tool_name = block.get("name", "")
+                    tool_input = block.get("input", {})
                     start_out = {
                         "type": "tool_start",
-                        "tool": block.get("name", ""),
-                        "input_summary": _summarize_tool_input(block.get("name"), block.get("input", {})),
+                        "tool": tool_name,
+                        "input_summary": _summarize_tool_input(tool_name, tool_input),
                         "conversation_id": conversation_id,
                     }
                     await _send(websocket, start_out)
+
+                    # Detect screenshot tools in fallback path
+                    if tool_name in self.SCREENSHOT_TOOLS:
+                        filename = tool_input.get("filename")
+                        if filename and isinstance(filename, str):
+                            resolved = Path(filename)
+                            if not resolved.is_absolute() and self._cwd:
+                                resolved = Path(self._cwd) / filename
+                            abs_path = str(resolved.resolve())
+                            self.image_paths.append(abs_path)
+                            await _send(websocket, {
+                                "type": "image",
+                                "path": abs_path,
+                                "conversation_id": conversation_id,
+                            })
+
                     done_out = {"type": "tool_done", "conversation_id": conversation_id}
                     await _send(websocket, done_out)
                     last_out = start_out

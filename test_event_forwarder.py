@@ -313,6 +313,63 @@ class TestAssistantFallback:
         assert "tool_start" in types
         assert "tool_done" in types
 
+    @pytest.mark.asyncio
+    async def test_assistant_fallback_screenshot_emits_image(self, forwarder_with_cwd, mock_websocket):
+        """Screenshot detection should also work in the assistant fallback path."""
+        fwd, tmp_path = forwarder_with_cwd
+        ws, _ = mock_websocket
+        event = {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {"type": "text", "text": "Here is the screenshot"},
+                    {
+                        "type": "tool_use",
+                        "name": "mcp__playwright__browser_take_screenshot",
+                        "input": {"filename": "instagram.png", "type": "png"},
+                    },
+                ],
+            },
+        }
+
+        send_calls = []
+        async def capture_send(ws, data):
+            send_calls.append(data)
+
+        with patch("server._send", side_effect=capture_send):
+            await fwd.forward(ws, event, "conv_1")
+
+        types = [c["type"] for c in send_calls]
+        assert "image" in types
+        image_msg = next(c for c in send_calls if c["type"] == "image")
+        assert image_msg["path"] == str(tmp_path / "instagram.png")
+        assert image_msg["conversation_id"] == "conv_1"
+        assert fwd.image_paths == [str(tmp_path / "instagram.png")]
+
+    @pytest.mark.asyncio
+    async def test_assistant_fallback_non_screenshot_no_image(self, forwarder, mock_websocket):
+        """Non-screenshot tools in assistant fallback should not emit image events."""
+        ws, _ = mock_websocket
+        event = {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {"type": "tool_use", "name": "Read", "input": {"file_path": "/test.py"}},
+                ],
+            },
+        }
+
+        send_calls = []
+        async def capture_send(ws, data):
+            send_calls.append(data)
+
+        with patch("server._send", side_effect=capture_send):
+            await forwarder.forward(ws, event, "conv_1")
+
+        types = [c["type"] for c in send_calls]
+        assert "image" not in types
+        assert forwarder.image_paths == []
+
 
 class TestToolInputSummarizer:
     def test_read_file_path(self):
