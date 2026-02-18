@@ -684,7 +684,14 @@ def _working_dir_matches(conversation_id: str, working_dir: str) -> bool:
     return conv.working_dir == working_dir or conv.original_working_dir == working_dir
 
 
-VALID_TOOLS = {"Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch"}
+VALID_TOOL_NAMES = {"Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch"}
+
+
+def _validate_tool_spec(spec: str) -> bool:
+    """Validate a tool spec like 'Bash' or 'Bash(git:*)'."""
+    # Extract base tool name (everything before optional parenthesized pattern)
+    base = spec.split("(", 1)[0]
+    return base in VALID_TOOL_NAMES
 
 
 async def _handle_update_permissions(websocket: WebSocket, msg: dict):
@@ -696,7 +703,7 @@ async def _handle_update_permissions(websocket: WebSocket, msg: dict):
         await _send(websocket, {"type": "error", "detail": "Missing conversation_id"})
         return
 
-    invalid = set(allowed_tools) - VALID_TOOLS
+    invalid = [t for t in allowed_tools if not _validate_tool_spec(t)]
     if invalid:
         await _send(websocket, {"type": "error", "detail": f"Invalid tools: {invalid}"})
         return

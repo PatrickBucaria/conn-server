@@ -9,7 +9,7 @@ import pytest
 from httpx import AsyncClient, ASGITransport
 
 from mcp_config import McpConfigManager
-from server import app
+from server import app, _validate_tool_spec
 from session_manager import SessionManager
 
 
@@ -449,3 +449,30 @@ class TestMcpServersEndpoint:
                 "name": "nonexistent", "transport": "stdio", "command": "cmd",
             })
         assert response.status_code == 404
+
+
+class TestValidateToolSpec:
+    """Tests for _validate_tool_spec — accepts bare tool names and pattern syntax."""
+
+    def test_bare_tool_names(self):
+        for tool in ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch"]:
+            assert _validate_tool_spec(tool) is True
+
+    def test_tool_with_pattern(self):
+        assert _validate_tool_spec("Bash(git:*)") is True
+        assert _validate_tool_spec("Bash(npm install:*)") is True
+        assert _validate_tool_spec("Bash(docker:*)") is True
+
+    def test_tool_with_multiple_colons(self):
+        assert _validate_tool_spec("Bash(git commit -m:*)") is True
+
+    def test_invalid_tool_name(self):
+        assert _validate_tool_spec("NotATool") is False
+        assert _validate_tool_spec("bash") is False  # case-sensitive
+        assert _validate_tool_spec("") is False
+
+    def test_invalid_tool_with_pattern(self):
+        assert _validate_tool_spec("NotATool(foo:*)") is False
+
+    def test_edit_with_pattern(self):
+        assert _validate_tool_spec("Edit(*.py)") is True
