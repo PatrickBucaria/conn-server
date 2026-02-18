@@ -451,6 +451,100 @@ class TestMcpServersEndpoint:
         assert response.status_code == 404
 
 
+class TestServeFileEndpoint:
+    """Tests for GET /files — serves image files back to the mobile client."""
+
+    @pytest.mark.asyncio
+    async def test_serve_png_file(self, test_client, headers, tmp_config_dir):
+        # Create a PNG file in the uploads dir
+        uploads = tmp_config_dir["uploads_dir"]
+        img = uploads / "screenshot.png"
+        img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+
+        async with test_client as client:
+            response = await client.get(f"/files?path={img}", headers=headers)
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_serve_jpg_file(self, test_client, headers, tmp_config_dir):
+        uploads = tmp_config_dir["uploads_dir"]
+        img = uploads / "photo.jpg"
+        img.write_bytes(b"\xff\xd8\xff\xe0" + b"\x00" * 50)
+
+        async with test_client as client:
+            response = await client.get(f"/files?path={img}", headers=headers)
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_serve_rejects_non_image(self, test_client, headers, tmp_config_dir):
+        uploads = tmp_config_dir["uploads_dir"]
+        txt = uploads / "secret.txt"
+        txt.write_text("password123")
+
+        async with test_client as client:
+            response = await client.get(f"/files?path={txt}", headers=headers)
+        assert response.status_code == 403
+        assert "not allowed" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_serve_rejects_py_file(self, test_client, headers, tmp_config_dir):
+        uploads = tmp_config_dir["uploads_dir"]
+        py = uploads / "server.py"
+        py.write_text("import os")
+
+        async with test_client as client:
+            response = await client.get(f"/files?path={py}", headers=headers)
+        assert response.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_serve_file_not_found(self, test_client, headers):
+        async with test_client as client:
+            response = await client.get("/files?path=/nonexistent/image.png", headers=headers)
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_serve_rejects_path_traversal(self, test_client, headers):
+        async with test_client as client:
+            response = await client.get("/files?path=/../../../etc/passwd.png", headers=headers)
+        assert response.status_code in (400, 404)
+
+    @pytest.mark.asyncio
+    async def test_serve_requires_auth(self, test_client):
+        async with test_client as client:
+            response = await client.get("/files?path=/tmp/image.png")
+        assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_serve_rejects_bad_token(self, test_client):
+        async with test_client as client:
+            response = await client.get(
+                "/files?path=/tmp/image.png",
+                headers={"Authorization": "Bearer wrong-token"},
+            )
+        assert response.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_serve_with_token_query_param(self, test_client, tmp_config_dir):
+        uploads = tmp_config_dir["uploads_dir"]
+        img = uploads / "token-test.png"
+        img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 50)
+        token = tmp_config_dir["token"]
+
+        async with test_client as client:
+            response = await client.get(f"/files?path={img}&token={token}")
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_serve_rejects_bad_token_query_param(self, test_client, tmp_config_dir):
+        uploads = tmp_config_dir["uploads_dir"]
+        img = uploads / "bad-token.png"
+        img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 50)
+
+        async with test_client as client:
+            response = await client.get(f"/files?path={img}&token=wrong-token")
+        assert response.status_code == 403
+
+
 class TestValidateToolSpec:
     """Tests for _validate_tool_spec — accepts bare tool names and pattern syntax."""
 

@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from server import EventForwarder, _summarize_tool_input
+from server import EventForwarder, _summarize_tool_input, _extract_screenshot_path
 
 
 @pytest.fixture
@@ -355,3 +355,210 @@ class TestToolInputSummarizer:
 
     def test_bash_empty_command(self):
         assert _summarize_tool_input("Bash", {}) == ""
+
+
+class TestExtractScreenshotPath:
+    """Tests for _extract_screenshot_path — parses filename from tool input."""
+
+    def test_extracts_filename(self):
+        assert _extract_screenshot_path('{"filename": "page-123.png"}') == "page-123.png"
+
+    def test_extracts_relative_filename(self):
+        assert _extract_screenshot_path('{"filename": "screenshots/test.png"}') == "screenshots/test.png"
+
+    def test_returns_none_when_no_filename(self):
+        assert _extract_screenshot_path('{"type": "png"}') is None
+
+    def test_returns_none_for_empty_input(self):
+        assert _extract_screenshot_path("") is None
+
+    def test_returns_none_for_none(self):
+        assert _extract_screenshot_path(None) is None
+
+    def test_returns_none_for_invalid_json(self):
+        assert _extract_screenshot_path('{"filename":') is None
+
+    def test_returns_none_for_non_string_filename(self):
+        assert _extract_screenshot_path('{"filename": 42}') is None
+
+    def test_extracts_from_full_input(self):
+        input_json = '{"type": "png", "filename": "shot.png", "fullPage": false}'
+        assert _extract_screenshot_path(input_json) == "shot.png"
+
+
+class TestScreenshotImageEvent:
+    """Tests for EventForwarder emitting image events on screenshot tools."""
+
+    @pytest.mark.asyncio
+    async def test_screenshot_tool_emits_image_event(self, forwarder, mock_websocket):
+        ws, _ = mock_websocket
+
+        # Start a screenshot tool with empty input
+        start_event = {
+            "type": "content_block_start",
+            "content_block": {
+                "type": "tool_use",
+                "name": "mcp__playwright__browser_take_screenshot",
+                "input": {},
+            },
+        }
+        with patch("server._send", new_callable=AsyncMock):
+            await forwarder.forward(ws, start_event, "conv_1")
+
+        # Stream tool input with filename
+        delta_event = {
+            "type": "content_block_delta",
+            "delta": {
+                "type": "input_json_delta",
+                "partial_json": '{"filename": "page-screenshot.png", "type": "png"}',
+            },
+        }
+        with patch("server._send", new_callable=AsyncMock):
+            await forwarder.forward(ws, delta_event, "conv_1")
+
+        # Stop the tool — should emit tool_start (if not sent), image, then tool_done
+        stop_event = {"type": "content_block_stop"}
+        send_calls = []
+        async def capture_send(ws, data):
+            send_calls.append(data)
+
+        with patch("server._send", side_effect=capture_send):
+            await forwarder.forward(ws, stop_event, "conv_1")
+
+        types = [c["type"] for c in send_calls]
+        assert "image" in types
+        image_msg = next(c for c in send_calls if c["type"] == "image")
+        assert image_msg["path"] == "page-screenshot.png"
+        assert image_msg["conversation_id"] == "conv_1"
+        assert "tool_done" in types
+
+    @pytest.mark.asyncio
+    async def test_screenshot_tool_tracks_image_paths(self, forwarder, mock_websocket):
+        ws, _ = mock_websocket
+
+        # Start screenshot tool
+        start_event = {
+            "type": "content_block_start",
+            "content_block": {
+                "type": "tool_use",
+                "name": "mcp__playwright__browser_take_screenshot",
+                "input": {},
+            },
+        }
+        with patch("server._send", new_callable=AsyncMock):
+            await forwarder.forward(ws, start_event, "conv_1")
+
+        # Input with filename
+        delta_event = {
+            "type": "content_block_delta",
+            "delta": {
+                "type": "input_json_delta",
+                "partial_json": '{"filename": "shot.png"}',
+            },
+        }
+        with patch("server._send", new_callable=AsyncMock):
+            await forwarder.forward(ws, delta_event, "conv_1")
+
+        # Stop
+        with patch("server._send", new_callable=AsyncMock):
+            await forwarder.forward(ws, {"type": "content_block_stop"}, "conv_1")
+
+        assert forwarder.image_paths == ["shot.png"]
+
+    @pytest.mark.asyncio
+    async def test_non_screenshot_tool_no_image_event(self, forwarder, mock_websocket):
+        ws, _ = mock_websocket
+
+        # Start a regular Read tool
+        start_event = {
+            "type": "content_block_start",
+            "content_block": {
+                "type": "tool_use",
+                "name": "Read",
+                "input": {"file_path": "/tmp/test.py"},
+            },
+        }
+        with patch("server._send", new_callable=AsyncMock):
+            await forwarder.forward(ws, start_event, "conv_1")
+
+        # Stop
+        send_calls = []
+        async def capture_send(ws, data):
+            send_calls.append(data)
+
+        with patch("server._send", side_effect=capture_send):
+            await forwarder.forward(ws, {"type": "content_block_stop"}, "conv_1")
+
+        types = [c["type"] for c in send_calls]
+        assert "image" not in types
+        assert forwarder.image_paths == []
+
+    @pytest.mark.asyncio
+    async def test_screenshot_without_filename_no_image_event(self, forwarder, mock_websocket):
+        ws, _ = mock_websocket
+
+        # Start screenshot tool with no filename in input
+        start_event = {
+            "type": "content_block_start",
+            "content_block": {
+                "type": "tool_use",
+                "name": "mcp__playwright__browser_take_screenshot",
+                "input": {},
+            },
+        }
+        with patch("server._send", new_callable=AsyncMock):
+            await forwarder.forward(ws, start_event, "conv_1")
+
+        # Input without filename
+        delta_event = {
+            "type": "content_block_delta",
+            "delta": {
+                "type": "input_json_delta",
+                "partial_json": '{"type": "png"}',
+            },
+        }
+        with patch("server._send", new_callable=AsyncMock):
+            await forwarder.forward(ws, delta_event, "conv_1")
+
+        # Stop
+        send_calls = []
+        async def capture_send(ws, data):
+            send_calls.append(data)
+
+        with patch("server._send", side_effect=capture_send):
+            await forwarder.forward(ws, {"type": "content_block_stop"}, "conv_1")
+
+        types = [c["type"] for c in send_calls]
+        assert "image" not in types
+        assert forwarder.image_paths == []
+
+    @pytest.mark.asyncio
+    async def test_multiple_screenshots_tracked(self, forwarder, mock_websocket):
+        ws, _ = mock_websocket
+
+        for filename in ["shot1.png", "shot2.png"]:
+            start_event = {
+                "type": "content_block_start",
+                "content_block": {
+                    "type": "tool_use",
+                    "name": "mcp__playwright__browser_take_screenshot",
+                    "input": {},
+                },
+            }
+            with patch("server._send", new_callable=AsyncMock):
+                await forwarder.forward(ws, start_event, "conv_1")
+
+            delta_event = {
+                "type": "content_block_delta",
+                "delta": {
+                    "type": "input_json_delta",
+                    "partial_json": json.dumps({"filename": filename}),
+                },
+            }
+            with patch("server._send", new_callable=AsyncMock):
+                await forwarder.forward(ws, delta_event, "conv_1")
+
+            with patch("server._send", new_callable=AsyncMock):
+                await forwarder.forward(ws, {"type": "content_block_stop"}, "conv_1")
+
+        assert forwarder.image_paths == ["shot1.png", "shot2.png"]
