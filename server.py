@@ -22,6 +22,7 @@ from auth import verify_token
 from config import load_config, get_working_dir, UPLOADS_DIR, LOG_DIR, WORKING_DIR
 from git_utils import get_current_branch, is_git_repo, create_worktree, remove_worktree
 from agent_manager import AgentManager
+from mcp_catalog import get_catalog
 from mcp_config import McpConfigManager
 from preview_manager import PreviewManager
 from session_manager import SessionManager
@@ -495,6 +496,14 @@ async def toggle_mcp_server(name: str, request: McpServerToggleRequest, authoriz
         logger.info(f"Toggled MCP server {name}: enabled={request.enabled}")
         return {"name": name, "enabled": request.enabled}
     raise HTTPException(status_code=404, detail="MCP server not found")
+
+
+@app.get("/mcp/catalog")
+async def list_mcp_catalog(authorization: str = Header(None)):
+    """Return the catalog of pre-configured MCP server templates."""
+    _verify_rest_auth(authorization)
+    installed = set(mcp_servers.get_server_names())
+    return {"catalog": get_catalog(installed)}
 
 
 # ---------- Agent management endpoints ----------
