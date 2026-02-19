@@ -21,6 +21,7 @@ from starlette.websockets import WebSocketState
 from auth import verify_token
 from config import load_config, get_working_dir, UPLOADS_DIR, LOG_DIR, WORKING_DIR
 from git_utils import get_current_branch, is_git_repo, create_worktree, remove_worktree
+from agent_manager import AgentManager
 from mcp_config import McpConfigManager
 from preview_manager import PreviewManager
 from session_manager import SessionManager
@@ -35,6 +36,7 @@ start_time: float = 0
 sessions = SessionManager()
 previews = PreviewManager()
 mcp_servers = McpConfigManager()
+agents = AgentManager()
 
 # Track connected WebSocket clients for broadcasting events
 connected_clients: list[WebSocket] = []
@@ -495,6 +497,108 @@ async def toggle_mcp_server(name: str, request: McpServerToggleRequest, authoriz
     raise HTTPException(status_code=404, detail="MCP server not found")
 
 
+# ---------- Agent management endpoints ----------
+
+
+class AgentRequest(BaseModel):
+    name: str
+    description: str
+    prompt: str = ""
+    model: typing.Optional[str] = None
+    tools: typing.Optional[typing.List[str]] = None
+    disallowed_tools: typing.Optional[typing.List[str]] = None
+    permission_mode: typing.Optional[str] = None
+    mcp_servers: typing.Optional[typing.List[str]] = None
+    max_turns: typing.Optional[int] = None
+
+
+@app.get("/agents")
+async def list_agents(authorization: str = Header(None)):
+    """List all available agents."""
+    _verify_rest_auth(authorization)
+    return {"agents": agents.list_agents()}
+
+
+@app.get("/agents/{name}")
+async def get_agent(name: str, authorization: str = Header(None)):
+    """Get full agent details including prompt."""
+    _verify_rest_auth(authorization)
+    agent = agents.get_agent(name)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return {
+        "name": agent.name,
+        "description": agent.description,
+        "prompt": agent.prompt,
+        "model": agent.model,
+        "tools": agent.tools,
+        "disallowed_tools": agent.disallowed_tools,
+        "permission_mode": agent.permission_mode,
+        "mcp_servers": agent.mcp_servers,
+        "max_turns": agent.max_turns,
+    }
+
+
+@app.post("/agents")
+async def create_agent(request: AgentRequest, authorization: str = Header(None)):
+    """Create a new agent."""
+    _verify_rest_auth(authorization)
+    from agent_manager import AgentInfo
+    agent = AgentInfo(
+        name=request.name,
+        description=request.description,
+        prompt=request.prompt,
+        model=request.model,
+        tools=request.tools,
+        disallowed_tools=request.disallowed_tools,
+        permission_mode=request.permission_mode,
+        mcp_servers=request.mcp_servers,
+        max_turns=request.max_turns,
+    )
+    try:
+        agents.create_agent(agent)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    logger.info(f"Created agent: {agent.name}")
+    return {"agent": agent.name}
+
+
+@app.put("/agents/{name}")
+async def update_agent(name: str, request: AgentRequest, authorization: str = Header(None)):
+    """Update an existing agent."""
+    _verify_rest_auth(authorization)
+    from agent_manager import AgentInfo
+    agent = AgentInfo(
+        name=request.name,
+        description=request.description,
+        prompt=request.prompt,
+        model=request.model,
+        tools=request.tools,
+        disallowed_tools=request.disallowed_tools,
+        permission_mode=request.permission_mode,
+        mcp_servers=request.mcp_servers,
+        max_turns=request.max_turns,
+    )
+    try:
+        result = agents.update_agent(name, agent)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not result:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    logger.info(f"Updated agent: {name}")
+    return {"agent": agent.name}
+
+
+@app.delete("/agents/{name}")
+async def delete_agent(name: str, authorization: str = Header(None)):
+    """Delete an agent."""
+    _verify_rest_auth(authorization)
+    if agents.delete_agent(name):
+        logger.info(f"Deleted agent: {name}")
+        return {"deleted": name}
+    raise HTTPException(status_code=404, detail="Agent not found")
+
+
 def _verify_rest_auth(authorization: str | None):
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
@@ -681,8 +785,9 @@ async def _handle_new_conversation(websocket: WebSocket, msg: dict):
     allowed_tools = msg.get("allowed_tools")
     mcp_server_names = msg.get("mcp_servers")
     model = msg.get("model")
+    agent = msg.get("agent")
 
-    conv = sessions.create_conversation(conversation_id, name, working_dir=working_dir, allowed_tools=allowed_tools, mcp_servers=mcp_server_names, model=model)
+    conv = sessions.create_conversation(conversation_id, name, working_dir=working_dir, allowed_tools=allowed_tools, mcp_servers=mcp_server_names, model=model, agent=agent)
 
     # Check if worktree isolation is needed
     if working_dir and is_git_repo(working_dir):
@@ -820,18 +925,11 @@ async def _handle_cancel(websocket: WebSocket, msg: dict):
 async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, session_id: str | None, is_first_turn: bool = False, cwd: str | None = None):
     """Spawn claude -p subprocess and stream events back via WebSocket."""
 
-    # Use per-conversation allowed tools, falling back to all tools
     conv = sessions.get_conversation(conversation_id)
-    tools = ",".join(conv.allowed_tools) if conv and conv.allowed_tools else "Read,Write,Edit,Bash,Glob,Grep,WebSearch,WebFetch"
+    use_agent = conv and conv.agent
 
-    cmd = [
-        "claude", "-p", text,
-        "--output-format", "stream-json",
-        "--tools", tools,
-        "--allowedTools", tools,
-        "--max-turns", "50",
-        "--verbose",
-        "--append-system-prompt",
+    # Helm-specific platform rules (appended regardless of agent)
+    helm_system_prompt = (
         "The user is communicating with you remotely via Helm, "
         "an Android app that connects to this machine over the local network. "
         "They cannot see your full terminal output or interact with files directly. "
@@ -855,26 +953,50 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
         "1. Option A — description\n"
         "2. Option B — description\n"
         "3. Option C — description\"\n"
-        "The user will reply with their choice number or a custom answer.",
-    ]
+        "The user will reply with their choice number or a custom answer."
+    )
 
-    # Add --model flag if conversation specifies a model
-    if conv and conv.model:
+    if use_agent:
+        # Agent mode: let the agent definition handle tools, model, permissions.
+        # Only append Helm platform rules.
+        cmd = [
+            "claude", "-p", text,
+            "--output-format", "stream-json",
+            "--max-turns", "50",
+            "--verbose",
+            "--agent", conv.agent,
+            "--append-system-prompt", helm_system_prompt,
+        ]
+    else:
+        # Manual mode: use per-conversation allowed tools
+        tools = ",".join(conv.allowed_tools) if conv and conv.allowed_tools else "Read,Write,Edit,Bash,Glob,Grep,WebSearch,WebFetch"
+        cmd = [
+            "claude", "-p", text,
+            "--output-format", "stream-json",
+            "--tools", tools,
+            "--allowedTools", tools,
+            "--max-turns", "50",
+            "--verbose",
+            "--append-system-prompt", helm_system_prompt,
+        ]
+
+    # Add --model flag if conversation specifies a model (manual mode only;
+    # agent mode gets model from the agent definition)
+    if not use_agent and conv and conv.model:
         cmd.extend(["--model", conv.model])
 
     # Generate --mcp-config file if conversation has MCP servers enabled
+    # (manual mode only; agent mode gets MCP from the agent definition)
     mcp_config_path = None
-    if conv and conv.mcp_servers:
+    if not use_agent and conv and conv.mcp_servers:
         mcp_config_path = mcp_servers.write_mcp_config_file(conv.mcp_servers)
         if mcp_config_path:
             cmd.extend(["--mcp-config", mcp_config_path])
-            # Auto-allow all tools from enabled MCP servers so they don't
-            # trigger interactive permission prompts on the terminal.
+            tools = cmd[cmd.index("--allowedTools") + 1] if "--allowedTools" in cmd else ""
             mcp_tool_patterns = [f"mcp__{name}__*" for name in conv.mcp_servers
                                  if mcp_servers.get_server(name) and mcp_servers.get_server(name).enabled]
-            if mcp_tool_patterns:
+            if mcp_tool_patterns and "--allowedTools" in cmd:
                 tools_with_mcp = tools + "," + ",".join(mcp_tool_patterns)
-                # Replace --allowedTools in cmd with the expanded list
                 idx = cmd.index("--allowedTools")
                 cmd[idx + 1] = tools_with_mcp
             logger.info(f"MCP config: {conv.mcp_servers} → {mcp_config_path}")

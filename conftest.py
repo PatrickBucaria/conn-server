@@ -19,11 +19,13 @@ def tmp_config_dir(tmp_path):
     worktrees_dir = tmp_path / "worktrees"
     config_file = tmp_path / "config.json"
     mcp_servers_file = tmp_path / "mcp_servers.json"
+    agents_dir = tmp_path / "agents"
 
     history_dir.mkdir()
     uploads_dir.mkdir()
     log_dir.mkdir()
     worktrees_dir.mkdir()
+    agents_dir.mkdir()
 
     token = "test-token-abc123"
     config_data = {
@@ -50,6 +52,7 @@ def tmp_config_dir(tmp_path):
          patch("session_manager.SESSIONS_FILE", sessions_file), \
          patch("session_manager.HISTORY_DIR", history_dir), \
          patch("mcp_config.MCP_SERVERS_FILE", mcp_servers_file), \
+         patch("agent_manager.AGENTS_DIR", agents_dir), \
          patch("server.UPLOADS_DIR", uploads_dir), \
          patch("server.LOG_DIR", log_dir), \
          patch("git_utils.WORKTREES_DIR", worktrees_dir):
@@ -61,6 +64,7 @@ def tmp_config_dir(tmp_path):
             "uploads_dir": uploads_dir,
             "worktrees_dir": worktrees_dir,
             "mcp_servers_file": mcp_servers_file,
+            "agents_dir": agents_dir,
             "projects_dir": tmp_path / "projects",
             "config_file": config_file,
         }

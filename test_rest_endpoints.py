@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 from httpx import AsyncClient, ASGITransport
 
+from agent_manager import AgentManager
 from mcp_config import McpConfigManager
 from server import app, _validate_tool_spec
 from session_manager import SessionManager
@@ -29,7 +30,8 @@ def test_client(tmp_config_dir):
     # Also patch the global sessions object in server module.
     # Must use yield (not return) so the patch stays active during the test.
     with patch("server.sessions", SessionManager()), \
-         patch("server.mcp_servers", McpConfigManager()):
+         patch("server.mcp_servers", McpConfigManager()), \
+         patch("server.agents", AgentManager(agents_dir=tmp_config_dir["agents_dir"])):
         transport = ASGITransport(app=app)
         yield AsyncClient(transport=transport, base_url="http://test")
 
@@ -570,3 +572,133 @@ class TestValidateToolSpec:
 
     def test_edit_with_pattern(self):
         assert _validate_tool_spec("Edit(*.py)") is True
+
+
+class TestAgentsEndpoint:
+    @pytest.mark.asyncio
+    async def test_list_agents_empty(self, test_client, headers):
+        async with test_client as client:
+            response = await client.get("/agents", headers=headers)
+        assert response.status_code == 200
+        assert response.json()["agents"] == []
+
+    @pytest.mark.asyncio
+    async def test_list_agents_requires_auth(self, test_client):
+        async with test_client as client:
+            response = await client.get("/agents")
+        assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_create_agent(self, test_client, headers):
+        async with test_client as client:
+            response = await client.post("/agents", headers=headers, json={
+                "name": "reviewer",
+                "description": "Code reviewer",
+                "prompt": "You review code.",
+                "model": "sonnet",
+                "tools": ["Read", "Grep"],
+            })
+        assert response.status_code == 200
+        assert response.json()["agent"] == "reviewer"
+
+    @pytest.mark.asyncio
+    async def test_create_and_list(self, test_client, headers):
+        async with test_client as client:
+            await client.post("/agents", headers=headers, json={
+                "name": "reviewer",
+                "description": "Code reviewer",
+                "model": "sonnet",
+            })
+            response = await client.get("/agents", headers=headers)
+        agents = response.json()["agents"]
+        assert len(agents) == 1
+        assert agents[0]["name"] == "reviewer"
+        assert agents[0]["description"] == "Code reviewer"
+
+    @pytest.mark.asyncio
+    async def test_create_duplicate(self, test_client, headers):
+        async with test_client as client:
+            await client.post("/agents", headers=headers, json={
+                "name": "reviewer", "description": "First",
+            })
+            response = await client.post("/agents", headers=headers, json={
+                "name": "reviewer", "description": "Second",
+            })
+        assert response.status_code == 400
+        assert "already exists" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_create_invalid_name(self, test_client, headers):
+        async with test_client as client:
+            response = await client.post("/agents", headers=headers, json={
+                "name": "Bad Name!", "description": "test",
+            })
+        assert response.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_get_agent(self, test_client, headers):
+        async with test_client as client:
+            await client.post("/agents", headers=headers, json={
+                "name": "reviewer",
+                "description": "Code reviewer",
+                "prompt": "You review code.",
+                "model": "sonnet",
+                "tools": ["Read", "Grep"],
+            })
+            response = await client.get("/agents/reviewer", headers=headers)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["name"] == "reviewer"
+        assert data["prompt"] == "You review code."
+        assert data["model"] == "sonnet"
+        assert data["tools"] == ["Read", "Grep"]
+
+    @pytest.mark.asyncio
+    async def test_get_agent_not_found(self, test_client, headers):
+        async with test_client as client:
+            response = await client.get("/agents/nonexistent", headers=headers)
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_update_agent(self, test_client, headers):
+        async with test_client as client:
+            await client.post("/agents", headers=headers, json={
+                "name": "reviewer", "description": "Original",
+            })
+            response = await client.put("/agents/reviewer", headers=headers, json={
+                "name": "reviewer", "description": "Updated", "prompt": "New prompt",
+            })
+        assert response.status_code == 200
+        assert response.json()["agent"] == "reviewer"
+
+    @pytest.mark.asyncio
+    async def test_update_agent_not_found(self, test_client, headers):
+        async with test_client as client:
+            response = await client.put("/agents/nonexistent", headers=headers, json={
+                "name": "nonexistent", "description": "test",
+            })
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_delete_agent(self, test_client, headers):
+        async with test_client as client:
+            await client.post("/agents", headers=headers, json={
+                "name": "reviewer", "description": "test",
+            })
+            response = await client.delete("/agents/reviewer", headers=headers)
+        assert response.status_code == 200
+        assert response.json()["deleted"] == "reviewer"
+
+    @pytest.mark.asyncio
+    async def test_delete_agent_not_found(self, test_client, headers):
+        async with test_client as client:
+            response = await client.delete("/agents/nonexistent", headers=headers)
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_create_requires_auth(self, test_client):
+        async with test_client as client:
+            response = await client.post("/agents", json={
+                "name": "reviewer", "description": "test",
+            })
+        assert response.status_code == 401
