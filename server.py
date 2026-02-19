@@ -25,6 +25,7 @@ from agent_manager import AgentManager
 from mcp_catalog import get_catalog
 from mcp_config import McpConfigManager
 from preview_manager import PreviewManager
+from project_config import get_project_config, get_custom_instructions, set_custom_instructions
 from session_manager import SessionManager
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -246,6 +247,26 @@ async def create_project(request: CreateProjectRequest, authorization: str = Hea
     logger.info(f"Created project directory: {new_project}")
 
     return {"name": name, "path": str(new_project)}
+
+
+@app.get("/projects/config")
+async def get_project_config_endpoint(path: str = Query(...), authorization: str = Header(None)):
+    """Get configuration (custom instructions) for a project."""
+    _verify_rest_auth(authorization)
+    return get_project_config(path)
+
+
+class UpdateProjectConfigRequest(BaseModel):
+    path: str
+    custom_instructions: str
+
+
+@app.put("/projects/config")
+async def update_project_config(request: UpdateProjectConfigRequest, authorization: str = Header(None)):
+    """Update custom instructions for a project."""
+    _verify_rest_auth(authorization)
+    set_custom_instructions(request.path, request.custom_instructions)
+    return get_project_config(request.path)
 
 
 @app.post("/restart")
@@ -962,8 +983,22 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
         "1. Option A — description\n"
         "2. Option B — description\n"
         "3. Option C — description\"\n"
-        "The user will reply with their choice number or a custom answer."
+        "The user will reply with their choice number or a custom answer.\n\n"
+        "DOCUMENTATION — IMPORTANT:\n"
+        "After making any code changes, investigate whether related documentation "
+        "(README files, docs/ folder, inline doc comments, CLAUDE.md, etc.) needs to be "
+        "updated to stay consistent with the changes you made. If you find stale or "
+        "missing documentation, update it as part of the same task."
     )
+
+    # Append per-project custom instructions if configured
+    project_dir = cwd or get_working_dir()
+    custom = get_custom_instructions(project_dir)
+    if custom:
+        conn_system_prompt += (
+            "\n\nPROJECT CUSTOM INSTRUCTIONS (set by the user for this project):\n"
+            + custom
+        )
 
     if use_agent:
         # Agent mode: let the agent definition handle tools, model, permissions.

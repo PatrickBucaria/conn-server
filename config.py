@@ -11,6 +11,7 @@ HISTORY_DIR = CONFIG_DIR / "history"
 LOG_DIR = CONFIG_DIR / "logs"
 UPLOADS_DIR = CONFIG_DIR / "uploads"
 WORKTREES_DIR = CONFIG_DIR / "worktrees"
+PROJECTS_CONFIG_DIR = CONFIG_DIR / "projects"
 
 DEFAULT_PORT = 8080
 DEFAULT_HOST = "0.0.0.0"
@@ -22,6 +23,7 @@ def _ensure_dirs():
     HISTORY_DIR.mkdir(exist_ok=True)
     LOG_DIR.mkdir(exist_ok=True)
     UPLOADS_DIR.mkdir(exist_ok=True)
+    PROJECTS_CONFIG_DIR.mkdir(exist_ok=True)
 
 
 def load_config() -> dict:
