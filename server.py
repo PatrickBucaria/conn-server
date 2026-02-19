@@ -1144,10 +1144,15 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
                 "conversation_id": conversation_id,
                 "session_id": new_session_id,
             }
-            # Include branch info for worktree conversations
+            # Include current git branch so the client can update mid-session
             conv_info = sessions.get_conversation(conversation_id)
             if conv_info and conv_info.git_worktree_path:
                 complete_msg["git_branch"] = f"conn/{conversation_id}"
+            else:
+                effective_cwd = cwd or get_working_dir()
+                branch = get_current_branch(effective_cwd)
+                if branch:
+                    complete_msg["git_branch"] = branch
             await _send(websocket, complete_msg)
 
         # Generate AI summary for new conversations (first turn only)
