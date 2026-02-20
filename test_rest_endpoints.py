@@ -500,15 +500,28 @@ class TestServeFileEndpoint:
 
     @pytest.mark.asyncio
     async def test_serve_file_not_found(self, test_client, headers):
+        # Path outside allowed directories returns 403 before reaching 404
         async with test_client as client:
             response = await client.get("/files?path=/nonexistent/image.png", headers=headers)
-        assert response.status_code == 404
+        assert response.status_code == 403
 
     @pytest.mark.asyncio
     async def test_serve_rejects_path_traversal(self, test_client, headers):
         async with test_client as client:
             response = await client.get("/files?path=/../../../etc/passwd.png", headers=headers)
-        assert response.status_code in (400, 404)
+        assert response.status_code in (400, 403)
+
+    @pytest.mark.asyncio
+    async def test_serve_rejects_outside_allowed_dirs(self, test_client, headers, tmp_path):
+        """Files outside uploads_dir/working_dir/tmp are rejected."""
+        img = tmp_path / "stray" / "photo.png"
+        img.parent.mkdir()
+        img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 50)
+
+        async with test_client as client:
+            response = await client.get(f"/files?path={img}", headers=headers)
+        assert response.status_code == 403
+        assert "outside allowed" in response.json()["detail"]
 
     @pytest.mark.asyncio
     async def test_serve_requires_auth(self, test_client):

@@ -27,11 +27,20 @@ WORKING_DIR = str(Path.home() / "Projects")
 
 
 def _ensure_dirs():
-    CONFIG_DIR.mkdir(exist_ok=True)
-    HISTORY_DIR.mkdir(exist_ok=True)
-    LOG_DIR.mkdir(exist_ok=True)
-    UPLOADS_DIR.mkdir(exist_ok=True)
-    PROJECTS_CONFIG_DIR.mkdir(exist_ok=True)
+    CONFIG_DIR.mkdir(mode=0o700, exist_ok=True)
+    HISTORY_DIR.mkdir(mode=0o700, exist_ok=True)
+    LOG_DIR.mkdir(mode=0o700, exist_ok=True)
+    UPLOADS_DIR.mkdir(mode=0o700, exist_ok=True)
+    PROJECTS_CONFIG_DIR.mkdir(mode=0o700, exist_ok=True)
+
+
+def _write_private_file(path: Path, content: str):
+    """Write a file with owner-only permissions (0600)."""
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, content.encode())
+    finally:
+        os.close(fd)
 
 
 def _get_local_ip() -> str:
@@ -64,8 +73,7 @@ def load_config() -> dict:
             "port": DEFAULT_PORT,
             "working_dir": WORKING_DIR,
         }
-        with open(CONFIG_FILE, "w") as f:
-            json.dump(config, f, indent=2)
+        _write_private_file(CONFIG_FILE, json.dumps(config, indent=2))
 
     config["_is_first_run"] = is_first_run
     return config

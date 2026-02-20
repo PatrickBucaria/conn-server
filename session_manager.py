@@ -2,11 +2,16 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
 from config import SESSIONS_FILE, HISTORY_DIR
+
+# Conversation IDs must be alphanumeric with hyphens/underscores (used in file paths)
+CONVERSATION_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$")
 
 
 @dataclass
@@ -40,8 +45,12 @@ class SessionManager:
 
     def _save(self):
         data = {"conversations": [asdict(c) for c in self._conversations.values()]}
-        with open(SESSIONS_FILE, "w") as f:
-            json.dump(data, f, indent=2)
+        content = json.dumps(data, indent=2)
+        fd = os.open(str(SESSIONS_FILE), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, content.encode())
+        finally:
+            os.close(fd)
 
     def list_conversations(self) -> list[dict]:
         return sorted(
@@ -51,6 +60,7 @@ class SessionManager:
         )
 
     def create_conversation(self, conversation_id: str, name: str, working_dir: str | None = None, allowed_tools: list[str] | None = None, mcp_servers: list[str] | None = None, model: str | None = None, agent: str | None = None) -> Conversation:
+        _validate_conversation_id(conversation_id)
         now = _iso_now()
         conv = Conversation(
             id=conversation_id,
@@ -121,11 +131,17 @@ class SessionManager:
 
     def append_history(self, conversation_id: str, entry: dict):
         """Append a message to the conversation's JSONL history."""
-        HISTORY_DIR.mkdir(exist_ok=True)
+        _validate_conversation_id(conversation_id)
+        HISTORY_DIR.mkdir(mode=0o700, exist_ok=True)
         history_file = HISTORY_DIR / f"{conversation_id}.jsonl"
         entry["timestamp"] = _iso_now()
-        with open(history_file, "a") as f:
-            f.write(json.dumps(entry) + "\n")
+        line = json.dumps(entry) + "\n"
+        # Open with restricted permissions (creates as 0600, appends if exists)
+        fd = os.open(str(history_file), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        try:
+            os.write(fd, line.encode())
+        finally:
+            os.close(fd)
 
     def get_history(self, conversation_id: str) -> list[dict]:
         """Read all history entries for a conversation."""
@@ -139,6 +155,15 @@ class SessionManager:
                 if line:
                     entries.append(json.loads(line))
         return entries
+
+
+def _validate_conversation_id(conversation_id: str):
+    """Validate conversation ID format to prevent path traversal."""
+    if not CONVERSATION_ID_PATTERN.match(conversation_id):
+        raise ValueError(
+            f"Invalid conversation ID '{conversation_id}': must be 1-128 alphanumeric "
+            f"characters, hyphens, or underscores"
+        )
 
 
 def _iso_now() -> str:
