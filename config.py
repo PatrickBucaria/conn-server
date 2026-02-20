@@ -1,7 +1,15 @@
-"""Load and manage server configuration from ~/.conn/config.json."""
+"""Load and manage server configuration from ~/.conn/config.json.
+
+Configuration priority (highest to lowest):
+  1. Environment variables: CONN_PORT, CONN_HOST, CONN_WORKING_DIR
+  2. Config file: ~/.conn/config.json
+  3. Defaults
+"""
 
 import json
+import os
 import secrets
+import socket
 from pathlib import Path
 
 CONFIG_DIR = Path.home() / ".conn"
@@ -15,7 +23,7 @@ PROJECTS_CONFIG_DIR = CONFIG_DIR / "projects"
 
 DEFAULT_PORT = 8080
 DEFAULT_HOST = "0.0.0.0"
-WORKING_DIR = "/Users/patrickbucaria/Projects"
+WORKING_DIR = str(Path.home() / "Projects")
 
 
 def _ensure_dirs():
@@ -26,25 +34,40 @@ def _ensure_dirs():
     PROJECTS_CONFIG_DIR.mkdir(exist_ok=True)
 
 
+def _get_local_ip() -> str:
+    """Get the machine's local network IP address."""
+    try:
+        # Connect to an external address to determine the local IP
+        # (doesn't actually send traffic)
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+
 def load_config() -> dict:
     """Load config, generating auth token on first run."""
     _ensure_dirs()
 
+    is_first_run = not CONFIG_FILE.exists()
+
     if CONFIG_FILE.exists():
         with open(CONFIG_FILE) as f:
-            return json.load(f)
+            config = json.load(f)
+    else:
+        config = {
+            "auth_token": secrets.token_hex(32),
+            "host": DEFAULT_HOST,
+            "port": DEFAULT_PORT,
+            "working_dir": WORKING_DIR,
+        }
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(config, f, indent=2)
 
-    config = {
-        "auth_token": secrets.token_hex(32),
-        "host": DEFAULT_HOST,
-        "port": DEFAULT_PORT,
-        "working_dir": WORKING_DIR,
-    }
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(config, f, indent=2)
-
-    print(f"Generated new config at {CONFIG_FILE}")
-    print(f"Auth token: {config['auth_token']}")
+    config["_is_first_run"] = is_first_run
     return config
 
 
@@ -53,12 +76,50 @@ def get_auth_token() -> str:
 
 
 def get_host() -> str:
-    return load_config().get("host", DEFAULT_HOST)
+    return os.environ.get("CONN_HOST") or load_config().get("host", DEFAULT_HOST)
 
 
 def get_port() -> int:
+    env_port = os.environ.get("CONN_PORT")
+    if env_port:
+        return int(env_port)
     return load_config().get("port", DEFAULT_PORT)
 
 
 def get_working_dir() -> str:
-    return load_config().get("working_dir", WORKING_DIR)
+    return os.environ.get("CONN_WORKING_DIR") or load_config().get("working_dir", WORKING_DIR)
+
+
+def print_startup_banner():
+    """Print server connection info on startup."""
+    config = load_config()
+    is_first_run = config.get("_is_first_run", False)
+    host = get_host()
+    port = get_port()
+    token = config["auth_token"]
+    working_dir = get_working_dir()
+    local_ip = _get_local_ip()
+
+    url = f"http://{local_ip}:{port}"
+
+    print()
+    print("=" * 50)
+    print("  Conn Server")
+    print()
+    print(f"  URL:        {url}")
+    print(f"  Auth token: {token}")
+    print(f"  Projects:   {working_dir}")
+    print("=" * 50)
+
+    if is_first_run:
+        print()
+        print(f"  Config generated at {CONFIG_FILE}")
+        print("  Enter the URL and auth token in the Conn app to connect.")
+
+    working_dir_path = Path(working_dir)
+    if not working_dir_path.is_dir():
+        print()
+        print(f"  Warning: Projects directory does not exist: {working_dir}")
+        print("  Set CONN_WORKING_DIR or edit ~/.conn/config.json")
+
+    print()

@@ -1,13 +1,14 @@
 """Tests for auth and config modules."""
 
 import json
+import os
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from auth import verify_token
-from config import load_config, get_auth_token, get_working_dir, get_port, get_host
+from config import load_config, get_auth_token, get_working_dir, get_port, get_host, print_startup_banner
 
 
 class TestVerifyToken:
@@ -69,6 +70,57 @@ class TestConfigHelpers:
 
     def test_get_host(self, tmp_config_dir):
         assert get_host() == "0.0.0.0"
+
+
+class TestEnvVarOverrides:
+    def test_conn_working_dir_env(self, tmp_config_dir):
+        with patch.dict(os.environ, {"CONN_WORKING_DIR": "/tmp/my-projects"}):
+            assert get_working_dir() == "/tmp/my-projects"
+
+    def test_conn_port_env(self, tmp_config_dir):
+        with patch.dict(os.environ, {"CONN_PORT": "9090"}):
+            assert get_port() == 9090
+
+    def test_conn_host_env(self, tmp_config_dir):
+        with patch.dict(os.environ, {"CONN_HOST": "127.0.0.1"}):
+            assert get_host() == "127.0.0.1"
+
+    def test_env_takes_precedence_over_config(self, tmp_config_dir):
+        """Env vars override config file values."""
+        with patch.dict(os.environ, {"CONN_WORKING_DIR": "/override"}):
+            assert get_working_dir() == "/override"
+        # Without env var, falls back to config
+        assert get_working_dir() == str(tmp_config_dir["projects_dir"])
+
+
+class TestStartupBanner:
+    def test_prints_connection_info(self, tmp_config_dir, capsys):
+        print_startup_banner()
+        output = capsys.readouterr().out
+        assert "Conn Server" in output
+        assert "URL:" in output
+        assert "Auth token:" in output
+        assert "Projects:" in output
+        assert tmp_config_dir["token"] in output
+
+    def test_first_run_message(self, tmp_path, capsys):
+        config_file = tmp_path / "config.json"
+        with patch("config.CONFIG_DIR", tmp_path), \
+             patch("config.CONFIG_FILE", config_file), \
+             patch("config.HISTORY_DIR", tmp_path / "history"), \
+             patch("config.UPLOADS_DIR", tmp_path / "uploads"), \
+             patch("config.LOG_DIR", tmp_path / "logs"), \
+             patch("config.PROJECTS_CONFIG_DIR", tmp_path / "projects"):
+            print_startup_banner()
+        output = capsys.readouterr().out
+        assert "Config generated" in output
+
+    def test_warns_missing_working_dir(self, tmp_config_dir, capsys):
+        with patch.dict(os.environ, {"CONN_WORKING_DIR": "/nonexistent/path"}):
+            print_startup_banner()
+        output = capsys.readouterr().out
+        assert "Warning" in output
+        assert "/nonexistent/path" in output
 
 
 class TestBuildPrompt:

@@ -41,6 +41,11 @@ def tmp_config_dir(tmp_path):
     # Create the projects directory
     (tmp_path / "projects").mkdir()
 
+    # Clear env var overrides so tests use the patched config values
+    env_overrides = patch.dict(os.environ, {}, clear=False)
+    for key in ("CONN_WORKING_DIR", "CONN_HOST", "CONN_PORT"):
+        os.environ.pop(key, None)
+
     # Patch in both config and session_manager modules, since session_manager
     # imports SESSIONS_FILE and HISTORY_DIR at the top level.
     with patch("config.CONFIG_DIR", tmp_path), \

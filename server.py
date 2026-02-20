@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse
 from starlette.websockets import WebSocketState
 
 from auth import verify_token
-from config import load_config, get_working_dir, UPLOADS_DIR, LOG_DIR, WORKING_DIR
+from config import load_config, get_working_dir, get_host, get_port, print_startup_banner, UPLOADS_DIR, LOG_DIR
 from git_utils import get_current_branch, is_git_repo, create_worktree, remove_worktree
 from agent_manager import AgentManager
 from mcp_catalog import get_catalog
@@ -55,8 +55,7 @@ def _get_conversation_lock(conversation_id: str) -> asyncio.Lock:
 async def lifespan(app: FastAPI):
     global start_time
     start_time = time.time()
-    config = load_config()
-    logger.info(f"Server starting — token: {config['auth_token'][:8]}...")
+    print_startup_banner()
     yield
     logger.info("Server shutting down — stopping preview servers")
     await previews.stop_all()
@@ -1533,5 +1532,4 @@ app.mount("/dashboard", StaticFiles(directory=str(DASHBOARD_DIR), html=True), na
 
 if __name__ == "__main__":
     import uvicorn
-    config = load_config()
-    uvicorn.run(app, host=config["host"], port=config["port"])
+    uvicorn.run(app, host=get_host(), port=get_port())
