@@ -2,6 +2,7 @@ fastapi==0.115.0
 uvicorn[standard]==0.30.6
 websockets==13.1
 python-multipart>=0.0.9
+qrcode>=7.0
 
 # Testing
 pytest>=8.0

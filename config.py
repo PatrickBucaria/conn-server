@@ -6,6 +6,7 @@ Configuration priority (highest to lowest):
   3. Defaults
 """
 
+import io
 import json
 import os
 import secrets
@@ -98,6 +99,29 @@ def get_working_dir() -> str:
     return os.environ.get("CONN_WORKING_DIR") or load_config().get("working_dir", WORKING_DIR)
 
 
+def _print_qr_code(host: str, port: int, token: str):
+    """Print a QR code to the terminal containing connection details."""
+    try:
+        import qrcode
+    except ImportError:
+        print("  (Install 'qrcode' package to display a scannable QR code)")
+        return
+
+    data = json.dumps({"host": host, "port": port, "token": token})
+    qr = qrcode.QRCode(box_size=1, border=2)
+    qr.add_data(data)
+    qr.make(fit=True)
+
+    # Capture ASCII output and indent it
+    buf = io.StringIO()
+    qr.print_ascii(out=buf, invert=True)
+    for line in buf.getvalue().splitlines():
+        print(f"  {line}")
+
+    print()
+    print("  Scan this QR code with the Conn app to connect.")
+
+
 def print_startup_banner():
     """Print server connection info on startup."""
     config = load_config()
@@ -119,10 +143,12 @@ def print_startup_banner():
     print(f"  Projects:   {working_dir}")
     print("=" * 50)
 
+    _print_qr_code(local_ip, port, token)
+
     if is_first_run:
         print()
         print(f"  Config generated at {CONFIG_FILE}")
-        print("  Enter the URL and auth token in the Conn app to connect.")
+        print("  Scan the QR code above with the Conn app, or enter the URL and token manually.")
 
     working_dir_path = Path(working_dir)
     if not working_dir_path.is_dir():
