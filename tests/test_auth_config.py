@@ -36,7 +36,9 @@ class TestLoadConfig:
              patch("config.CONFIG_FILE", config_file), \
              patch("config.HISTORY_DIR", tmp_path / "history"), \
              patch("config.UPLOADS_DIR", tmp_path / "uploads"), \
-             patch("config.LOG_DIR", tmp_path / "logs"):
+             patch("config.LOG_DIR", tmp_path / "logs"), \
+             patch("config.RELEASES_DIR", tmp_path / "releases"), \
+             patch("config.PROJECTS_CONFIG_DIR", tmp_path / "projects"):
             config = load_config()
 
         assert config_file.exists()
@@ -50,7 +52,9 @@ class TestLoadConfig:
              patch("config.CONFIG_FILE", config_file), \
              patch("config.HISTORY_DIR", tmp_path / "history"), \
              patch("config.UPLOADS_DIR", tmp_path / "uploads"), \
-             patch("config.LOG_DIR", tmp_path / "logs"):
+             patch("config.LOG_DIR", tmp_path / "logs"), \
+             patch("config.RELEASES_DIR", tmp_path / "releases"), \
+             patch("config.PROJECTS_CONFIG_DIR", tmp_path / "projects"):
             config1 = load_config()
             config2 = load_config()
 
@@ -110,6 +114,7 @@ class TestStartupBanner:
              patch("config.HISTORY_DIR", tmp_path / "history"), \
              patch("config.UPLOADS_DIR", tmp_path / "uploads"), \
              patch("config.LOG_DIR", tmp_path / "logs"), \
+             patch("config.RELEASES_DIR", tmp_path / "releases"), \
              patch("config.PROJECTS_CONFIG_DIR", tmp_path / "projects"):
             print_startup_banner()
         output = capsys.readouterr().out

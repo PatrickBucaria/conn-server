@@ -1,0 +1,9 @@
+[project]
+name = "conn-server"
+version = "0.1.0"
+description = "Remote control server for Claude CLI"
+requires-python = ">=3.9"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "strict"

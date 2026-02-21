@@ -512,14 +512,15 @@ class TestServeFileEndpoint:
         assert response.status_code in (400, 403)
 
     @pytest.mark.asyncio
-    async def test_serve_rejects_outside_allowed_dirs(self, test_client, headers, tmp_path):
-        """Files outside uploads_dir/working_dir/tmp are rejected."""
-        img = tmp_path / "stray" / "photo.png"
-        img.parent.mkdir()
-        img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 50)
+    async def test_serve_rejects_outside_allowed_dirs(self, test_client, headers):
+        """Files outside uploads_dir/working_dir/tmp are rejected.
 
+        /tmp is an allowed dir, so we use a fake path outside all allowed roots.
+        The file doesn't need to exist — the allowed-dir check happens before
+        the existence check.
+        """
         async with test_client as client:
-            response = await client.get(f"/files?path={img}", headers=headers)
+            response = await client.get("/files?path=/opt/secret/photo.png", headers=headers)
         assert response.status_code == 403
         assert "outside allowed" in response.json()["detail"]
 
