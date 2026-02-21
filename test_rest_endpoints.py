@@ -587,6 +587,81 @@ class TestValidateToolSpec:
         assert _validate_tool_spec("Edit(*.py)") is True
 
 
+class TestUpdateEndpoint:
+    @pytest.mark.asyncio
+    async def test_update_check_no_release(self, test_client, headers):
+        async with test_client as client:
+            response = await client.get("/update/check", headers=headers)
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_update_check_with_release(self, test_client, headers, tmp_config_dir):
+        releases_dir = tmp_config_dir["releases_dir"]
+        version_data = {
+            "versionCode": 42,
+            "versionName": "1.0.0-dev.42",
+            "buildDate": "2026-02-20T00:00:00Z",
+            "notes": "Test build",
+        }
+        (releases_dir / "version.json").write_text(json.dumps(version_data))
+
+        async with test_client as client:
+            response = await client.get("/update/check", headers=headers)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["versionCode"] == 42
+        assert data["versionName"] == "1.0.0-dev.42"
+
+    @pytest.mark.asyncio
+    async def test_update_check_requires_auth(self, test_client):
+        async with test_client as client:
+            response = await client.get("/update/check")
+        assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_update_download_no_apk(self, test_client, headers):
+        async with test_client as client:
+            response = await client.get("/update/download", headers=headers)
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_update_download_with_apk(self, test_client, headers, tmp_config_dir):
+        releases_dir = tmp_config_dir["releases_dir"]
+        apk = releases_dir / "latest.apk"
+        apk.write_bytes(b"\x00" * 100)
+
+        async with test_client as client:
+            response = await client.get("/update/download", headers=headers)
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_update_download_with_token_param(self, test_client, tmp_config_dir):
+        releases_dir = tmp_config_dir["releases_dir"]
+        apk = releases_dir / "latest.apk"
+        apk.write_bytes(b"\x00" * 100)
+        token = tmp_config_dir["token"]
+
+        async with test_client as client:
+            response = await client.get(f"/update/download?token={token}")
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_update_download_rejects_bad_token(self, test_client, tmp_config_dir):
+        releases_dir = tmp_config_dir["releases_dir"]
+        apk = releases_dir / "latest.apk"
+        apk.write_bytes(b"\x00" * 100)
+
+        async with test_client as client:
+            response = await client.get("/update/download?token=wrong")
+        assert response.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_update_download_requires_auth(self, test_client):
+        async with test_client as client:
+            response = await client.get("/update/download")
+        assert response.status_code == 401
+
+
 class TestAgentsEndpoint:
     @pytest.mark.asyncio
     async def test_list_agents_empty(self, test_client, headers):

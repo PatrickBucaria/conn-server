@@ -19,6 +19,7 @@ def tmp_config_dir(tmp_path):
     worktrees_dir = tmp_path / "worktrees"
     config_file = tmp_path / "config.json"
     mcp_servers_file = tmp_path / "mcp_servers.json"
+    releases_dir = tmp_path / "releases"
     agents_dir = tmp_path / "agents"
     projects_config_dir = tmp_path / "projects_config"
 
@@ -26,6 +27,7 @@ def tmp_config_dir(tmp_path):
     uploads_dir.mkdir()
     log_dir.mkdir()
     worktrees_dir.mkdir()
+    releases_dir.mkdir()
     agents_dir.mkdir()
     projects_config_dir.mkdir()
 
@@ -60,9 +62,11 @@ def tmp_config_dir(tmp_path):
          patch("session_manager.HISTORY_DIR", history_dir), \
          patch("mcp_config.MCP_SERVERS_FILE", mcp_servers_file), \
          patch("agent_manager.AGENTS_DIR", agents_dir), \
+         patch("config.RELEASES_DIR", releases_dir), \
          patch("config.PROJECTS_CONFIG_DIR", projects_config_dir), \
          patch("project_config.PROJECTS_CONFIG_DIR", projects_config_dir), \
          patch("server.UPLOADS_DIR", uploads_dir), \
+         patch("server.RELEASES_DIR", releases_dir), \
          patch("server.LOG_DIR", log_dir), \
          patch("git_utils.WORKTREES_DIR", worktrees_dir):
         yield {
@@ -75,6 +79,7 @@ def tmp_config_dir(tmp_path):
             "mcp_servers_file": mcp_servers_file,
             "agents_dir": agents_dir,
             "projects_dir": tmp_path / "projects",
+            "releases_dir": releases_dir,
             "projects_config_dir": projects_config_dir,
             "config_file": config_file,
         }

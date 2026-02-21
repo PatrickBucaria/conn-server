@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse
 from starlette.websockets import WebSocketState
 
 from auth import verify_token
-from config import load_config, get_working_dir, get_host, get_port, print_startup_banner, UPLOADS_DIR, LOG_DIR, WORKTREES_DIR
+from config import load_config, get_working_dir, get_host, get_port, print_startup_banner, UPLOADS_DIR, LOG_DIR, WORKTREES_DIR, RELEASES_DIR
 from git_utils import get_current_branch, is_git_repo, create_worktree, remove_worktree
 from agent_manager import AgentManager
 from mcp_catalog import get_catalog
@@ -373,6 +373,39 @@ async def _wait_deploy(proc: asyncio.subprocess.Process, log_file: Path):
         logger.info(f"Deploy succeeded (log: {log_file})")
     else:
         logger.error(f"Deploy failed with exit code {proc.returncode} (log: {log_file})")
+
+
+# ---------- Self-hosted update endpoints ----------
+
+
+@app.get("/update/check")
+async def update_check(authorization: str = Header(None)):
+    """Return the latest available APK version info."""
+    _verify_rest_auth(authorization)
+    version_file = RELEASES_DIR / "version.json"
+    if not version_file.exists():
+        raise HTTPException(status_code=404, detail="No release available")
+    return json.loads(version_file.read_text())
+
+
+@app.get("/update/download")
+async def update_download(token: str = Query(None), authorization: str = Header(None)):
+    """Download the latest APK. Accepts auth via header or ?token= query param."""
+    if token:
+        if not verify_token(token):
+            raise HTTPException(status_code=403, detail="Invalid token")
+    else:
+        _verify_rest_auth(authorization)
+
+    apk_file = RELEASES_DIR / "latest.apk"
+    if not apk_file.exists():
+        raise HTTPException(status_code=404, detail="No APK available")
+
+    return FileResponse(
+        str(apk_file),
+        media_type="application/vnd.android.package-archive",
+        filename="conn-update.apk",
+    )
 
 
 class PreviewStartRequest(BaseModel):

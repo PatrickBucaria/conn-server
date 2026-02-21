@@ -20,6 +20,7 @@ HISTORY_DIR = CONFIG_DIR / "history"
 LOG_DIR = CONFIG_DIR / "logs"
 UPLOADS_DIR = CONFIG_DIR / "uploads"
 WORKTREES_DIR = CONFIG_DIR / "worktrees"
+RELEASES_DIR = CONFIG_DIR / "releases"
 PROJECTS_CONFIG_DIR = CONFIG_DIR / "projects"
 
 DEFAULT_PORT = 8080
@@ -32,6 +33,7 @@ def _ensure_dirs():
     HISTORY_DIR.mkdir(mode=0o700, exist_ok=True)
     LOG_DIR.mkdir(mode=0o700, exist_ok=True)
     UPLOADS_DIR.mkdir(mode=0o700, exist_ok=True)
+    RELEASES_DIR.mkdir(mode=0o700, exist_ok=True)
     PROJECTS_CONFIG_DIR.mkdir(mode=0o700, exist_ok=True)
 
 
