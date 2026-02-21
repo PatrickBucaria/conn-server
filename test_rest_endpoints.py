@@ -661,6 +661,74 @@ class TestUpdateEndpoint:
             response = await client.get("/update/download")
         assert response.status_code == 401
 
+    @pytest.mark.asyncio
+    async def test_releases_empty(self, test_client, headers):
+        async with test_client as client:
+            response = await client.get("/update/releases", headers=headers)
+        assert response.status_code == 200
+        assert response.json()["releases"] == []
+
+    @pytest.mark.asyncio
+    async def test_releases_with_manifest(self, test_client, headers, tmp_config_dir):
+        releases_dir = tmp_config_dir["releases_dir"]
+        manifest = [
+            {"versionCode": 95, "versionName": "1.0.0-dev.95", "buildDate": "2026-02-21T02:40:41Z", "notes": "Build 95", "filename": "conn-v1.0.0-dev.95.apk"},
+            {"versionCode": 94, "versionName": "1.0.0-dev.94", "buildDate": "2026-02-20T20:00:00Z", "notes": "Build 94", "filename": "conn-v1.0.0-dev.94.apk"},
+        ]
+        (releases_dir / "releases.json").write_text(json.dumps(manifest))
+
+        async with test_client as client:
+            response = await client.get("/update/releases", headers=headers)
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["releases"]) == 2
+        assert data["releases"][0]["versionCode"] == 95
+
+    @pytest.mark.asyncio
+    async def test_releases_requires_auth(self, test_client):
+        async with test_client as client:
+            response = await client.get("/update/releases")
+        assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_download_specific_file(self, test_client, headers, tmp_config_dir):
+        releases_dir = tmp_config_dir["releases_dir"]
+        apk = releases_dir / "conn-v1.0.0-dev.95.apk"
+        apk.write_bytes(b"\x00" * 100)
+
+        async with test_client as client:
+            response = await client.get("/update/download/conn-v1.0.0-dev.95.apk", headers=headers)
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_download_specific_file_not_found(self, test_client, headers):
+        async with test_client as client:
+            response = await client.get("/update/download/nonexistent.apk", headers=headers)
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_download_specific_file_path_traversal(self, test_client, headers):
+        async with test_client as client:
+            response = await client.get("/update/download/..%2F..%2Fetc%2Fpasswd", headers=headers)
+        assert response.status_code in (400, 404)
+
+    @pytest.mark.asyncio
+    async def test_download_specific_file_with_token(self, test_client, tmp_config_dir):
+        releases_dir = tmp_config_dir["releases_dir"]
+        apk = releases_dir / "conn-v1.0.0-dev.95.apk"
+        apk.write_bytes(b"\x00" * 100)
+        token = tmp_config_dir["token"]
+
+        async with test_client as client:
+            response = await client.get(f"/update/download/conn-v1.0.0-dev.95.apk?token={token}")
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_download_specific_file_requires_auth(self, test_client):
+        async with test_client as client:
+            response = await client.get("/update/download/conn-v1.0.0-dev.95.apk")
+        assert response.status_code == 401
+
 
 class TestAgentsEndpoint:
     @pytest.mark.asyncio

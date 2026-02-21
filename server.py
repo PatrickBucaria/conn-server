@@ -408,6 +408,40 @@ async def update_download(token: str = Query(None), authorization: str = Header(
     )
 
 
+@app.get("/update/releases")
+async def update_releases(authorization: str = Header(None)):
+    """Return the list of all available builds."""
+    _verify_rest_auth(authorization)
+    manifest = RELEASES_DIR / "releases.json"
+    if not manifest.exists():
+        return {"releases": []}
+    return {"releases": json.loads(manifest.read_text())}
+
+
+@app.get("/update/download/{filename}")
+async def update_download_file(filename: str, token: str = Query(None), authorization: str = Header(None)):
+    """Download a specific APK by filename. Accepts auth via header or ?token= query param."""
+    if token:
+        if not verify_token(token):
+            raise HTTPException(status_code=403, detail="Invalid token")
+    else:
+        _verify_rest_auth(authorization)
+
+    # Prevent path traversal
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    apk_file = RELEASES_DIR / filename
+    if not apk_file.exists():
+        raise HTTPException(status_code=404, detail="APK not found")
+
+    return FileResponse(
+        str(apk_file),
+        media_type="application/vnd.android.package-archive",
+        filename=filename,
+    )
+
+
 class PreviewStartRequest(BaseModel):
     conversation_id: str
 
