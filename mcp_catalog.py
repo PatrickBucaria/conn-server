@@ -6,6 +6,7 @@ credentials. The app shows these as one-tap install options.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
+from pathlib import Path
 
 
 @dataclass
@@ -28,6 +29,7 @@ class CatalogEntry:
     args: list[str] | None = None
     url: str | None = None
     credentials: list[CredentialField] = field(default_factory=list)
+    default_env: dict[str, str] | None = None  # Env vars to include when installing (non-secret)
     setup_note: str | None = None
     doc_url: str | None = None
 
@@ -73,6 +75,17 @@ CATALOG: list[CatalogEntry] = [
         command="npx",
         args=["-y", "@anthropic-ai/mcp-sequential-thinking"],
         doc_url="https://github.com/anthropics/anthropic-mcp-sequential-thinking",
+    ),
+    CatalogEntry(
+        id="auto-mobile",
+        display_name="AutoMobile",
+        description="Android device automation — tap, type, scroll, observe screens, manage emulators",
+        transport="stdio",
+        command="npx",
+        args=["-y", "auto-mobile@latest"],
+        default_env={"ANDROID_HOME": str(Path.home() / "Library/Android/sdk")},
+        setup_note="Requires an Android emulator or device with USB debugging enabled on the server.",
+        doc_url="https://github.com/zillow/auto-mobile",
     ),
     # -- Setup note (confirm before install) --
     CatalogEntry(
