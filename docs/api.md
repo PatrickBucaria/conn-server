@@ -27,7 +27,7 @@ All endpoints require `Authorization: Bearer {token}` unless noted.
 
 ## WebSocket Protocol
 
-Endpoint: `ws://{host}:{port}/ws/chat`
+Endpoint: `wss://{host}:{port}/ws/chat` (TLS) or `ws://{host}:{port}/ws/chat` (plain)
 
 ### Client → Server
 

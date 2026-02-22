@@ -10,6 +10,7 @@ A self-hosted server that lets you interact with [Claude Code](https://docs.anth
 - **Project context** — point each conversation at a different project directory
 - **MCP integration** — configure Model Context Protocol servers for extended tool access
 - **Web preview** — auto-detect and serve dev servers for web projects
+- **Built-in TLS** — auto-generated EC P-256 self-signed certificate with cert pinning (no CA needed)
 - **Self-hosted updates** — optionally serve app releases from the server
 
 ## Requirements
@@ -38,10 +39,10 @@ This will:
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-uvicorn server:app --host 0.0.0.0 --port 8080
+python server.py
 ```
 
-On first run, the server generates a config file at `~/.conn/config.json` with a random auth token.
+On first run, the server generates a config file at `~/.conn/config.json` with a random auth token and TLS certificates at `~/.conn/tls/`.
 
 ## Configuration
 
@@ -51,7 +52,7 @@ The server reads from `~/.conn/config.json`:
 {
   "auth_token": "your-secret-token",
   "host": "0.0.0.0",
-  "port": 8080,
+  "port": 8443,
   "working_dir": "~/Projects"
 }
 ```
@@ -80,7 +81,7 @@ See [docs/api.md](docs/api.md) for the full REST and WebSocket protocol referenc
 
 ## Building a Custom Client
 
-The WebSocket protocol is straightforward. Connect to `ws://{host}:{port}/ws/chat` and:
+The WebSocket protocol is straightforward. Connect to `wss://{host}:{port}/ws/chat` (or `ws://` if TLS is not configured) and:
 
 1. **Authenticate** — send `{"type": "auth", "token": "..."}` as the first message. Server responds with `{"type": "auth_ok"}`.
 2. **Create a conversation** — send `{"type": "new_conversation", "conversation_id": "uuid", "name": "My Chat", "working_dir": "/path/to/project"}`
@@ -100,6 +101,9 @@ All server data lives in `~/.conn/`:
 ~/.conn/
 ├── config.json           # Server configuration
 ├── sessions.json         # Active conversation metadata
+├── tls/                  # TLS certificates (auto-generated on first run)
+│   ├── server.crt        # EC P-256 certificate (PEM)
+│   └── server.key        # Private key (PEM, 0600 permissions)
 ├── history/              # Conversation history (JSONL per conversation)
 ├── uploads/              # Uploaded images
 ├── logs/                 # Server logs
@@ -107,6 +111,19 @@ All server data lives in `~/.conn/`:
 ├── worktrees/            # Git worktrees for conversations
 └── mcp_servers.json      # MCP server configuration
 ```
+
+## TLS
+
+The server generates a self-signed EC P-256 certificate on first run and serves all traffic over HTTPS (port 8443). The certificate's DER bytes are included in the startup QR code so the mobile app can pin the exact certificate — no CA or reverse proxy needed.
+
+To regenerate certificates:
+```bash
+rm -rf ~/.conn/tls/
+# Restart the server — new certs are generated automatically
+# Re-scan the QR code on all connected devices
+```
+
+**macOS note**: System Python links against LibreSSL, which has TLS handshake issues with Android's BoringSSL. Use Homebrew Python (`brew install python`) instead. The setup script handles this automatically.
 
 ## Testing
 

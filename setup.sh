@@ -13,8 +13,9 @@ PLIST_NAME="com.conn.server"
 PLIST_PATH="$HOME/Library/LaunchAgents/$PLIST_NAME.plist"
 
 DEFAULT_PROJECTS_DIR="$HOME/Projects"
-DEFAULT_PORT=8080
+DEFAULT_PORT=8443
 DEFAULT_HOST="0.0.0.0"
+TLS_DIR="$CONFIG_DIR/tls"
 
 OS="$(uname)"
 
@@ -97,13 +98,37 @@ echo "  ${BOLD}Python${NC}"
 echo "  ──────────────────────────────────────────────────"
 echo ""
 
-if check_command python3; then
-  py_ver=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+# Find the best Python to use.
+# On macOS, prefer Homebrew Python because it links against OpenSSL.
+# The system Python uses LibreSSL, which has TLS compatibility issues
+# with modern clients (Android/BoringSSL handshake failures).
+PYTHON_BIN=""
+
+if [ "$OS" = "Darwin" ]; then
+  # Check for Homebrew Python (preferred on macOS for OpenSSL support)
+  for brew_py in python@3.13 python@3.12 python@3.11 python@3.10; do
+    brew_py_bin="$(brew --prefix "$brew_py" 2>/dev/null)/bin/python3" 2>/dev/null
+    if [ -x "$brew_py_bin" ] 2>/dev/null; then
+      PYTHON_BIN="$brew_py_bin"
+      break
+    fi
+  done
+fi
+
+# Fall back to system python3
+if [ -z "$PYTHON_BIN" ] && check_command python3; then
+  PYTHON_BIN="$(command -v python3)"
+fi
+
+if [ -n "$PYTHON_BIN" ]; then
+  py_ver=$("$PYTHON_BIN" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
   py_major=$(echo "$py_ver" | cut -d. -f1)
   py_minor=$(echo "$py_ver" | cut -d. -f2)
+  ssl_ver=$("$PYTHON_BIN" -c "import ssl; print(ssl.OPENSSL_VERSION)")
 
   if [ "$py_major" -ge 3 ] && [ "$py_minor" -ge 9 ]; then
-    success "Python $py_ver found"
+    success "Python $py_ver found ($PYTHON_BIN)"
+    success "SSL: $ssl_ver"
   else
     warn "Python $py_ver found but 3.9+ is required"
   fi
@@ -111,10 +136,11 @@ else
   fail "Python 3 not found"
 fi
 
-if ! check_command python3 || { [ "$py_major" -le 3 ] && [ "$py_minor" -lt 9 ]; }; then
+if [ -z "$PYTHON_BIN" ] || { [ "$py_major" -le 3 ] && [ "$py_minor" -lt 9 ]; }; then
   if [ "$OS" = "Darwin" ] && check_command brew; then
     if prompt_yn "Install Python 3.12 via Homebrew?" "Y"; then
       brew install python@3.12
+      PYTHON_BIN="$(brew --prefix python@3.12)/bin/python3"
       success "Python installed"
     fi
   else
@@ -180,8 +206,19 @@ echo ""
 
 # --- Python venv ---
 info "Setting up Python environment..."
+
+# Recreate venv if it was built with a different Python
+if [ -d "$VENV_DIR" ]; then
+  VENV_PYTHON="$("$VENV_DIR/bin/python3" -c "import sys; print(sys.base_prefix)" 2>/dev/null || echo "")"
+  TARGET_PREFIX="$("$PYTHON_BIN" -c "import sys; print(sys.prefix)" 2>/dev/null || echo "")"
+  if [ "$VENV_PYTHON" != "$TARGET_PREFIX" ]; then
+    info "Recreating venv (switching to $("$PYTHON_BIN" -c "import ssl; print(ssl.OPENSSL_VERSION)"))"
+    rm -rf "$VENV_DIR"
+  fi
+fi
+
 if [ ! -d "$VENV_DIR" ]; then
-  python3 -m venv "$VENV_DIR"
+  "$PYTHON_BIN" -m venv "$VENV_DIR"
 fi
 "$VENV_DIR/bin/pip" install -q --disable-pip-version-check -r "$PROJECT_ROOT/requirements.txt"
 success "Python environment ready"
@@ -244,6 +281,21 @@ finally:
 "
 success "Config saved to $CONFIG_FILE"
 
+# --- TLS certificates ---
+echo ""
+info "Generating TLS certificate..."
+"$VENV_DIR/bin/python3" -c "
+import sys
+sys.path.insert(0, '$PROJECT_ROOT')
+from tls import ensure_certs, get_cert_fingerprint
+ensure_certs()
+print(get_cert_fingerprint())
+" > /tmp/conn_fingerprint 2>&1
+CERT_FINGERPRINT=$(tail -1 /tmp/conn_fingerprint)
+rm -f /tmp/conn_fingerprint
+success "TLS certificate ready"
+echo "  Fingerprint: $CERT_FINGERPRINT"
+
 # --- Service ---
 echo ""
 if [ "$OS" = "Darwin" ]; then
@@ -272,6 +324,10 @@ if [ "$OS" = "Darwin" ]; then
         <string>$HOST</string>
         <string>--port</string>
         <string>$PORT</string>
+        <string>--ssl-keyfile</string>
+        <string>$TLS_DIR/server.key</string>
+        <string>--ssl-certfile</string>
+        <string>$TLS_DIR/server.crt</string>
     </array>
     <key>WorkingDirectory</key>
     <string>$PROJECT_ROOT</string>
@@ -299,7 +355,7 @@ PLIST
     echo ""
     info "Checking server health..."
     sleep 2
-    if curl -sf "http://localhost:$PORT/health" >/dev/null 2>&1; then
+    if curl -skf "https://localhost:$PORT/health" >/dev/null 2>&1; then
       success "Server is responding"
     else
       warn "Server not responding yet — it may still be starting"
@@ -312,7 +368,7 @@ PLIST
   else
     echo ""
     echo "  To start the server manually:"
-    echo "    cd $PROJECT_ROOT && ./venv/bin/uvicorn server:app --host $HOST --port $PORT"
+    echo "    cd $PROJECT_ROOT && ./venv/bin/uvicorn server:app --host $HOST --port $PORT --ssl-keyfile $TLS_DIR/server.key --ssl-certfile $TLS_DIR/server.crt"
   fi
 else
   # Linux — offer systemd
@@ -329,7 +385,7 @@ After=network.target
 Type=simple
 User=$USER
 WorkingDirectory=$PROJECT_ROOT
-ExecStart=$VENV_DIR/bin/uvicorn server:app --host $HOST --port $PORT
+ExecStart=$VENV_DIR/bin/uvicorn server:app --host $HOST --port $PORT --ssl-keyfile $TLS_DIR/server.key --ssl-certfile $TLS_DIR/server.crt
 Restart=always
 RestartSec=5
 Environment=PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
@@ -346,7 +402,7 @@ SYSTEMD
       echo ""
       info "Checking server health..."
       sleep 2
-      if curl -sf "http://localhost:$PORT/health" >/dev/null 2>&1; then
+      if curl -skf "https://localhost:$PORT/health" >/dev/null 2>&1; then
         success "Server is responding"
       else
         warn "Server not responding yet — it may still be starting"
@@ -358,7 +414,7 @@ SYSTEMD
   if [ ! -f "/etc/systemd/system/conn.service" ] 2>/dev/null; then
     echo ""
     echo "  To start the server manually:"
-    echo "    cd $PROJECT_ROOT && ./venv/bin/uvicorn server:app --host $HOST --port $PORT"
+    echo "    cd $PROJECT_ROOT && ./venv/bin/uvicorn server:app --host $HOST --port $PORT --ssl-keyfile $TLS_DIR/server.key --ssl-certfile $TLS_DIR/server.crt"
   fi
 fi
 
@@ -404,19 +460,23 @@ echo "  ${BOLD}Setup Complete${NC}"
 echo "  =================================================="
 echo ""
 echo "  ${BOLD}Server${NC}"
-echo "  URL:        http://$CONN_IP:$PORT"
+echo "  URL:        https://$CONN_IP:$PORT"
 if [ "$CONN_IP" != "$LOCAL_IP" ]; then
-  echo "  LAN URL:    http://$LOCAL_IP:$PORT"
+  echo "  LAN URL:    https://$LOCAL_IP:$PORT"
 fi
 echo "  Auth token: $AUTH_TOKEN"
+echo "  TLS:        $CERT_FINGERPRINT"
 echo "  Projects:   $PROJECTS_DIR"
 
-# QR code
+# QR code (includes cert for zero-trust-on-first-use setup)
 "$VENV_DIR/bin/python3" -c "
-import json, io
+import json, io, sys
+sys.path.insert(0, '$PROJECT_ROOT')
 try:
     import qrcode
-    data = json.dumps({'host': '$CONN_IP', 'port': $PORT, 'token': '$AUTH_TOKEN'})
+    from tls import get_cert_der_b64
+    cert = get_cert_der_b64()
+    data = json.dumps({'host': '$CONN_IP', 'port': $PORT, 'token': '$AUTH_TOKEN', 'cert': cert}, separators=(',', ':'))
     qr = qrcode.QRCode(box_size=1, border=2)
     qr.add_data(data)
     qr.make(fit=True)

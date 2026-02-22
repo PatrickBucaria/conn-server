@@ -15,7 +15,7 @@ Conn server is a Python FastAPI backend that bridges WebSocket/REST clients to C
 # Manual start
 pip install -r requirements.txt
 python server.py
-# Or: uvicorn server:app --host 0.0.0.0 --port 8080
+# Or: uvicorn server:app --host 0.0.0.0 --port 8443 --ssl-keyfile ~/.conn/tls/server.key --ssl-certfile ~/.conn/tls/server.crt
 ```
 
 ### Testing
@@ -32,6 +32,7 @@ pytest -k "test_create"                      # Pattern match
 - `test_rest_endpoints.py` — REST endpoints (health, conversations, projects, upload, updates)
 - `test_event_forwarder.py` — EventForwarder stream-json mapping, tool input accumulation
 - `test_auth_config.py` — Token verification, config loading/generation
+- `test_tls.py` — TLS cert generation, EC P-256, fingerprint, DER export, QR size
 - `test_concurrency.py` — Per-conversation locks, cancel targeting, concurrent process management
 - `test_agent_manager.py` — Agent CRUD, frontmatter parsing
 - `test_git_utils.py` — Git worktree operations
@@ -48,6 +49,7 @@ pytest -k "test_create"                      # Pattern match
 ├── server.py              # Main app, WebSocket + REST endpoints
 ├── session_manager.py     # Conversation tracking, JSONL history
 ├── config.py              # Config management (~/.conn/config.json)
+├── tls.py                 # EC P-256 cert generation, fingerprint, DER export
 ├── auth.py                # Bearer token verification
 ├── agent_manager.py       # Agent CRUD and frontmatter parsing
 ├── mcp_config.py          # MCP server configuration
@@ -80,6 +82,7 @@ pytest -k "test_create"                      # Pattern match
 |------|---------|
 | `server.py` | Main FastAPI app, WebSocket + REST endpoints |
 | `config.py` | Reads `~/.conn/config.json`, env var overrides |
+| `tls.py` | EC P-256 cert generation, fingerprint, DER export for QR codes |
 | `auth.py` | Bearer token verification |
 | `session_manager.py` | Conversation tracking, JSONL history |
 | `agent_manager.py` | Agent CRUD, markdown frontmatter parsing |
@@ -99,3 +102,5 @@ pytest -k "test_create"                      # Pattern match
 6. **Image Read tool results**: Claude's stream-json can emit multi-MB lines. Stdout buffer is set to 32MB
 7. **Never run dev servers via Bash tool**: Long-lived processes hang the conversation lock. Use `PreviewManager` instead
 8. **Python venv has hardcoded paths**: If the project is moved, recreate the venv
+9. **TLS certs auto-generated**: On first run, `tls.py` generates EC P-256 certs at `~/.conn/tls/`. The cert DER bytes are included in the QR code so apps can pin the exact cert. To regenerate: `rm -rf ~/.conn/tls/` and restart the server, then re-scan QR on all devices
+10. **macOS LibreSSL vs OpenSSL**: System Python on macOS links against LibreSSL, which has TLS handshake issues with Android's BoringSSL. Use Homebrew Python (`brew install python`). The setup script prefers Homebrew Python automatically

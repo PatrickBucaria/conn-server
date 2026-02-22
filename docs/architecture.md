@@ -54,7 +54,7 @@ Any tool that writes APK files in this format can publish updates. The server ju
 Server reads from `~/.conn/config.json` (run `./setup.sh` for interactive setup):
 
 - Auto-generates auth token on first run
-- Default port: 8080
+- Default port: 8443 (HTTPS)
 - Working directory: `~/Projects` (configurable via `working_dir` in config)
 - Environment variable overrides: `CONN_WORKING_DIR`, `CONN_PORT`, `CONN_HOST` (take precedence over config file)
 - Conversation history: `~/.conn/history/{conversation_id}.jsonl`
