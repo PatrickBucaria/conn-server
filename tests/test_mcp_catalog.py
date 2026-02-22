@@ -10,7 +10,7 @@ class TestCatalogData:
     """Verify the bundled catalog entries are well-formed."""
 
     def test_catalog_has_entries(self):
-        assert len(CATALOG) >= 3
+        assert len(CATALOG) >= 13
 
     def test_all_entries_have_required_fields(self):
         for entry in CATALOG:
@@ -48,6 +48,63 @@ class TestCatalogData:
         cred = entry.credentials[0]
         assert cred.placement == "header"
         assert cred.value_prefix == "Bearer "
+
+    def test_sentry_entry(self):
+        entry = next(e for e in CATALOG if e.id == "sentry")
+        assert entry.transport == "http"
+        assert entry.url == "https://mcp.sentry.dev/mcp"
+        assert entry.credentials == []
+        assert entry.setup_note  # OAuth note
+
+    def test_figma_entry(self):
+        entry = next(e for e in CATALOG if e.id == "figma")
+        assert entry.transport == "http"
+        assert entry.url == "https://mcp.figma.com/mcp"
+        assert entry.credentials == []
+        assert entry.setup_note  # OAuth note
+
+    def test_linear_entry(self):
+        entry = next(e for e in CATALOG if e.id == "linear")
+        assert entry.transport == "http"
+        assert entry.url == "https://mcp.linear.app/mcp"
+        assert len(entry.credentials) == 1
+        assert entry.credentials[0].placement == "header"
+
+    def test_notion_entry(self):
+        entry = next(e for e in CATALOG if e.id == "notion")
+        assert entry.transport == "stdio"
+        assert entry.command == "npx"
+        assert len(entry.credentials) == 1
+        assert entry.credentials[0].key == "NOTION_TOKEN"
+        assert entry.credentials[0].placement == "env"
+
+    def test_slack_entry(self):
+        entry = next(e for e in CATALOG if e.id == "slack")
+        assert entry.transport == "stdio"
+        assert len(entry.credentials) == 2
+        keys = {c.key for c in entry.credentials}
+        assert keys == {"SLACK_BOT_TOKEN", "SLACK_TEAM_ID"}
+
+    def test_brave_search_entry(self):
+        entry = next(e for e in CATALOG if e.id == "brave-search")
+        assert entry.transport == "stdio"
+        assert len(entry.credentials) == 1
+        assert entry.credentials[0].key == "BRAVE_API_KEY"
+
+    def test_postgres_entry(self):
+        entry = next(e for e in CATALOG if e.id == "postgres")
+        assert entry.transport == "stdio"
+        assert len(entry.credentials) == 1
+        assert entry.credentials[0].key == "DATABASE_URL"
+        assert entry.setup_note  # Read-only note
+
+    def test_no_credential_servers(self):
+        """Fetch, Memory, Sequential Thinking should have no credentials."""
+        for sid in ("fetch", "memory", "sequential-thinking"):
+            entry = next(e for e in CATALOG if e.id == sid)
+            assert entry.transport == "stdio"
+            assert entry.command == "npx"
+            assert entry.credentials == []
 
 
 class TestGetCatalog:
