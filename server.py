@@ -1628,4 +1628,12 @@ app.mount("/dashboard", StaticFiles(directory=str(DASHBOARD_DIR), html=True), na
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host=get_host(), port=get_port())
+    from tls import ensure_certs
+    cert_path, key_path = ensure_certs()
+    uvicorn.run(
+        app,
+        host=get_host(),
+        port=get_port(),
+        ssl_keyfile=str(key_path),
+        ssl_certfile=str(cert_path),
+    )

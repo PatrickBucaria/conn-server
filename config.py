@@ -5,6 +5,7 @@ Configuration priority (highest to lowest):
   2. Config file: ~/.conn/config.json
   3. Defaults
 """
+from __future__ import annotations
 
 import io
 import json
@@ -23,7 +24,7 @@ WORKTREES_DIR = CONFIG_DIR / "worktrees"
 RELEASES_DIR = CONFIG_DIR / "releases"
 PROJECTS_CONFIG_DIR = CONFIG_DIR / "projects"
 
-DEFAULT_PORT = 8080
+DEFAULT_PORT = 8443
 DEFAULT_HOST = "0.0.0.0"
 WORKING_DIR = str(Path.home() / "Projects")
 
@@ -101,7 +102,7 @@ def get_working_dir() -> str:
     return os.environ.get("CONN_WORKING_DIR") or load_config().get("working_dir", WORKING_DIR)
 
 
-def _print_qr_code(host: str, port: int, token: str):
+def _print_qr_code(host: str, port: int, token: str, cert_der_b64: str | None = None):
     """Print a QR code to the terminal containing connection details."""
     try:
         import qrcode
@@ -109,7 +110,10 @@ def _print_qr_code(host: str, port: int, token: str):
         print("  (Install 'qrcode' package to display a scannable QR code)")
         return
 
-    data = json.dumps({"host": host, "port": port, "token": token})
+    payload = {"host": host, "port": port, "token": token}
+    if cert_der_b64:
+        payload["cert"] = cert_der_b64
+    data = json.dumps(payload, separators=(",", ":"))  # Compact JSON
     qr = qrcode.QRCode(box_size=1, border=2)
     qr.add_data(data)
     qr.make(fit=True)
@@ -126,6 +130,8 @@ def _print_qr_code(host: str, port: int, token: str):
 
 def print_startup_banner():
     """Print server connection info on startup."""
+    from tls import ensure_certs, get_cert_fingerprint, get_cert_der_b64
+
     config = load_config()
     is_first_run = config.get("_is_first_run", False)
     host = get_host()
@@ -134,7 +140,12 @@ def print_startup_banner():
     working_dir = get_working_dir()
     local_ip = _get_local_ip()
 
-    url = f"http://{local_ip}:{port}"
+    # Ensure TLS certs exist
+    ensure_certs()
+    fingerprint = get_cert_fingerprint()
+    cert_der_b64 = get_cert_der_b64()
+
+    url = f"https://{local_ip}:{port}"
 
     print()
     print("=" * 50)
@@ -142,10 +153,11 @@ def print_startup_banner():
     print()
     print(f"  URL:        {url}")
     print(f"  Auth token: {token}")
+    print(f"  TLS:        {fingerprint}")
     print(f"  Projects:   {working_dir}")
     print("=" * 50)
 
-    _print_qr_code(local_ip, port, token)
+    _print_qr_code(local_ip, port, token, cert_der_b64)
 
     if is_first_run:
         print()

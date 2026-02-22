@@ -43,7 +43,7 @@ class TestLoadConfig:
 
         assert config_file.exists()
         assert len(config["auth_token"]) == 64  # hex(32) = 64 chars
-        assert config["port"] == 8080
+        assert config["port"] == 8443
 
     def test_generated_config_persists(self, tmp_path):
         config_file = tmp_path / "config.json"
