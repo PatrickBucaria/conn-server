@@ -2,7 +2,7 @@
 name = "conn-server"
 version = "0.1.0"
 description = "Remote control server for Claude CLI"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
