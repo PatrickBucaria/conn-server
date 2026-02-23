@@ -135,18 +135,18 @@ if [ -n "$PYTHON_BIN" ]; then
   py_minor=$(echo "$py_ver" | cut -d. -f2)
   ssl_ver=$("$PYTHON_BIN" -c "import ssl; print(ssl.OPENSSL_VERSION)")
 
-  if [ "$py_major" -ge 3 ] && [ "$py_minor" -ge 9 ]; then
+  if [ "$py_major" -ge 3 ] && [ "$py_minor" -ge 10 ]; then
     success "Python $py_ver found ($PYTHON_BIN)"
     success "SSL: $ssl_ver"
   else
-    warn "Python $py_ver found but 3.9+ is required"
+    warn "Python $py_ver found but 3.10+ is required"
   fi
 else
   fail "Python 3 not found"
 fi
 
 NEEDS_PYTHON=false
-if [ -z "$PYTHON_BIN" ] || { [ "$py_major" -le 3 ] && [ "$py_minor" -lt 9 ]; }; then
+if [ -z "$PYTHON_BIN" ] || { [ "$py_major" -le 3 ] && [ "$py_minor" -lt 10 ]; }; then
   NEEDS_PYTHON=true
 elif [ "$OS" = "Darwin" ] && echo "$ssl_ver" | grep -qi "libressl"; then
   warn "LibreSSL detected — causes TLS handshake failures with Android/iOS clients"
@@ -174,7 +174,7 @@ if [ "$NEEDS_PYTHON" = true ]; then
     fi
   else
     echo ""
-    echo "  Install Python 3.9+:"
+    echo "  Install Python 3.10+:"
     if [ "$OS" = "Darwin" ]; then
       echo "    brew install python@3.12"
     else

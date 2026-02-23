@@ -15,7 +15,7 @@ A self-hosted server that lets you interact with [Claude Code](https://docs.anth
 
 ## Requirements
 
-- Python 3.9+
+- Python 3.10+
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (the Claude CLI) — `npm install -g @anthropic-ai/claude-code`
 
 ## Quick Start
