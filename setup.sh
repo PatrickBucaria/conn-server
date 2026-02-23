@@ -63,9 +63,14 @@ check_command() {
 # ---------- Banner ----------
 
 echo ""
-echo "  =================================================="
-echo "  ${BOLD}Conn Server Setup${NC}"
-echo "  =================================================="
+echo "  ${BOLD}   ██████╗ ██████╗ ███╗   ██╗███╗   ██╗${NC}"
+echo "  ${BOLD}  ██╔════╝██╔═══██╗████╗  ██║████╗  ██║${NC}"
+echo "  ${BOLD}  ██║     ██║   ██║██╔██╗ ██║██╔██╗ ██║${NC}"
+echo "  ${BOLD}  ██║     ██║   ██║██║╚██╗██║██║╚██╗██║${NC}"
+echo "  ${BOLD}  ╚██████╗╚██████╔╝██║ ╚████║██║ ╚████║${NC}"
+echo "  ${BOLD}   ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝╚═╝  ╚═══╝${NC}"
+echo ""
+echo "  ${BLUE}Server Setup${NC}"
 echo ""
 
 # ==========================================================
@@ -106,12 +111,16 @@ PYTHON_BIN=""
 
 if [ "$OS" = "Darwin" ]; then
   # Check for Homebrew Python (preferred on macOS for OpenSSL support)
+  # Homebrew puts the unversioned "python3" in libexec/bin/, while
+  # bin/ only has the versioned name (e.g., python3.12).
   for brew_py in python@3.13 python@3.12 python@3.11 python@3.10; do
-    brew_py_bin="$(brew --prefix "$brew_py" 2>/dev/null)/bin/python3" 2>/dev/null
-    if [ -x "$brew_py_bin" ] 2>/dev/null; then
-      PYTHON_BIN="$brew_py_bin"
-      break
-    fi
+    brew_prefix="$(brew --prefix "$brew_py" 2>/dev/null)" 2>/dev/null || continue
+    for candidate in "$brew_prefix/libexec/bin/python3" "$brew_prefix/bin/python3"; do
+      if [ -x "$candidate" ] 2>/dev/null; then
+        PYTHON_BIN="$candidate"
+        break 2
+      fi
+    done
   done
 fi
 
@@ -136,12 +145,32 @@ else
   fail "Python 3 not found"
 fi
 
+NEEDS_PYTHON=false
 if [ -z "$PYTHON_BIN" ] || { [ "$py_major" -le 3 ] && [ "$py_minor" -lt 9 ]; }; then
+  NEEDS_PYTHON=true
+elif [ "$OS" = "Darwin" ] && echo "$ssl_ver" | grep -qi "libressl"; then
+  warn "LibreSSL detected — causes TLS handshake failures with Android/iOS clients"
+  NEEDS_PYTHON=true
+fi
+
+if [ "$NEEDS_PYTHON" = true ]; then
   if [ "$OS" = "Darwin" ] && check_command brew; then
-    if prompt_yn "Install Python 3.12 via Homebrew?" "Y"; then
+    if prompt_yn "Install Python 3.12 via Homebrew? (uses OpenSSL for TLS compatibility)" "Y"; then
       brew install python@3.12
-      PYTHON_BIN="$(brew --prefix python@3.12)/bin/python3"
-      success "Python installed"
+      brew_prefix="$(brew --prefix python@3.12)"
+      if [ -x "$brew_prefix/libexec/bin/python3" ]; then
+        PYTHON_BIN="$brew_prefix/libexec/bin/python3"
+      else
+        PYTHON_BIN="$brew_prefix/bin/python3"
+      fi
+      py_ver=$("$PYTHON_BIN" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+      ssl_ver=$("$PYTHON_BIN" -c "import ssl; print(ssl.OPENSSL_VERSION)")
+      success "Python $py_ver installed"
+      success "SSL: $ssl_ver"
+    else
+      if echo "$ssl_ver" | grep -qi "libressl"; then
+        warn "Continuing with LibreSSL — Android/iOS connections will fail"
+      fi
     fi
   else
     echo ""
@@ -469,27 +498,52 @@ echo "  TLS:        $CERT_FINGERPRINT"
 echo "  Projects:   $PROJECTS_DIR"
 
 # QR code (includes cert for zero-trust-on-first-use setup)
+# Generates both a terminal QR and an SVG file for small displays.
 "$VENV_DIR/bin/python3" -c "
-import json, io, sys
+import json, io, sys, os
 sys.path.insert(0, '$PROJECT_ROOT')
 try:
     import qrcode
+    from qrcode.image.svg import SvgPathImage
     from tls import get_cert_der_b64
     cert = get_cert_der_b64()
     data = json.dumps({'host': '$CONN_IP', 'port': $PORT, 'token': '$AUTH_TOKEN', 'cert': cert}, separators=(',', ':'))
     qr = qrcode.QRCode(box_size=1, border=2)
     qr.add_data(data)
     qr.make(fit=True)
+    # Terminal QR
     buf = io.StringIO()
     qr.print_ascii(out=buf, invert=True)
     print()
     for line in buf.getvalue().splitlines():
         print(f'  {line}')
     print()
-    print('  Scan this QR code with the Conn app to connect.')
+    # SVG file for small terminals
+    svg_path = os.path.expanduser('~/.conn/qr-code.svg')
+    qr_svg = qrcode.QRCode(box_size=10, border=4)
+    qr_svg.add_data(data)
+    qr_svg.make(fit=True)
+    img = qr_svg.make_image(image_factory=SvgPathImage)
+    img.save(svg_path)
+    print('  Scan the QR code above, or open the image:')
+    print(f'  {svg_path}')
 except ImportError:
     pass
 " 2>/dev/null || true
+
+QR_SVG="$CONFIG_DIR/qr-code.svg"
+if [ -f "$QR_SVG" ]; then
+  echo ""
+  if prompt_yn "Open QR code image?" "Y"; then
+    if [ "$OS" = "Darwin" ]; then
+      open "$QR_SVG"
+    elif check_command xdg-open; then
+      xdg-open "$QR_SVG"
+    else
+      info "Open $QR_SVG in a browser to scan"
+    fi
+  fi
+fi
 
 echo ""
 echo "  =================================================="
