@@ -7,8 +7,8 @@ from unittest.mock import patch
 
 import pytest
 
-from auth import verify_token
-from config import load_config, get_auth_token, get_working_dir, get_port, get_host, print_startup_banner
+from conn_server.auth import verify_token
+from conn_server.config import load_config, get_auth_token, get_working_dir, get_port, get_host, print_startup_banner
 
 
 class TestVerifyToken:
@@ -32,13 +32,13 @@ class TestLoadConfig:
         config_file = tmp_path / "config.json"
         config_dir = tmp_path
 
-        with patch("config.CONFIG_DIR", config_dir), \
-             patch("config.CONFIG_FILE", config_file), \
-             patch("config.HISTORY_DIR", tmp_path / "history"), \
-             patch("config.UPLOADS_DIR", tmp_path / "uploads"), \
-             patch("config.LOG_DIR", tmp_path / "logs"), \
-             patch("config.RELEASES_DIR", tmp_path / "releases"), \
-             patch("config.PROJECTS_CONFIG_DIR", tmp_path / "projects"):
+        with patch("conn_server.config.CONFIG_DIR", config_dir), \
+             patch("conn_server.config.CONFIG_FILE", config_file), \
+             patch("conn_server.config.HISTORY_DIR", tmp_path / "history"), \
+             patch("conn_server.config.UPLOADS_DIR", tmp_path / "uploads"), \
+             patch("conn_server.config.LOG_DIR", tmp_path / "logs"), \
+             patch("conn_server.config.RELEASES_DIR", tmp_path / "releases"), \
+             patch("conn_server.config.PROJECTS_CONFIG_DIR", tmp_path / "projects"):
             config = load_config()
 
         assert config_file.exists()
@@ -48,13 +48,13 @@ class TestLoadConfig:
     def test_generated_config_persists(self, tmp_path):
         config_file = tmp_path / "config.json"
 
-        with patch("config.CONFIG_DIR", tmp_path), \
-             patch("config.CONFIG_FILE", config_file), \
-             patch("config.HISTORY_DIR", tmp_path / "history"), \
-             patch("config.UPLOADS_DIR", tmp_path / "uploads"), \
-             patch("config.LOG_DIR", tmp_path / "logs"), \
-             patch("config.RELEASES_DIR", tmp_path / "releases"), \
-             patch("config.PROJECTS_CONFIG_DIR", tmp_path / "projects"):
+        with patch("conn_server.config.CONFIG_DIR", tmp_path), \
+             patch("conn_server.config.CONFIG_FILE", config_file), \
+             patch("conn_server.config.HISTORY_DIR", tmp_path / "history"), \
+             patch("conn_server.config.UPLOADS_DIR", tmp_path / "uploads"), \
+             patch("conn_server.config.LOG_DIR", tmp_path / "logs"), \
+             patch("conn_server.config.RELEASES_DIR", tmp_path / "releases"), \
+             patch("conn_server.config.PROJECTS_CONFIG_DIR", tmp_path / "projects"):
             config1 = load_config()
             config2 = load_config()
 
@@ -109,13 +109,13 @@ class TestStartupBanner:
 
     def test_first_run_message(self, tmp_path, capsys):
         config_file = tmp_path / "config.json"
-        with patch("config.CONFIG_DIR", tmp_path), \
-             patch("config.CONFIG_FILE", config_file), \
-             patch("config.HISTORY_DIR", tmp_path / "history"), \
-             patch("config.UPLOADS_DIR", tmp_path / "uploads"), \
-             patch("config.LOG_DIR", tmp_path / "logs"), \
-             patch("config.RELEASES_DIR", tmp_path / "releases"), \
-             patch("config.PROJECTS_CONFIG_DIR", tmp_path / "projects"):
+        with patch("conn_server.config.CONFIG_DIR", tmp_path), \
+             patch("conn_server.config.CONFIG_FILE", config_file), \
+             patch("conn_server.config.HISTORY_DIR", tmp_path / "history"), \
+             patch("conn_server.config.UPLOADS_DIR", tmp_path / "uploads"), \
+             patch("conn_server.config.LOG_DIR", tmp_path / "logs"), \
+             patch("conn_server.config.RELEASES_DIR", tmp_path / "releases"), \
+             patch("conn_server.config.PROJECTS_CONFIG_DIR", tmp_path / "projects"):
             print_startup_banner()
         output = capsys.readouterr().out
         assert "Config generated" in output
@@ -132,24 +132,24 @@ class TestBuildPrompt:
     """Test the _build_prompt helper for image handling."""
 
     def test_no_images(self):
-        from server import _build_prompt
+        from conn_server.server import _build_prompt
         assert _build_prompt("hello", []) == "hello"
 
     def test_with_images(self):
-        from server import _build_prompt
+        from conn_server.server import _build_prompt
         result = _build_prompt("describe this", ["/tmp/img.jpg"])
         assert "[The user attached an image" in result
         assert "/tmp/img.jpg" in result
         assert "describe this" in result
 
     def test_images_only(self):
-        from server import _build_prompt
+        from conn_server.server import _build_prompt
         result = _build_prompt("", ["/tmp/img.jpg"])
         assert "View and describe it" in result
         assert "/tmp/img.jpg" in result
 
     def test_multiple_images(self):
-        from server import _build_prompt
+        from conn_server.server import _build_prompt
         result = _build_prompt("look", ["/tmp/a.jpg", "/tmp/b.jpg"])
         assert "/tmp/a.jpg" in result
         assert "/tmp/b.jpg" in result

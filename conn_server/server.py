@@ -19,15 +19,15 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from starlette.websockets import WebSocketState
 
-from auth import verify_token
-from config import load_config, get_working_dir, get_host, get_port, print_startup_banner, UPLOADS_DIR, LOG_DIR, WORKTREES_DIR, RELEASES_DIR
-from git_utils import get_current_branch, is_git_repo, create_worktree, remove_worktree
-from agent_manager import AgentManager
-from mcp_catalog import get_catalog
-from mcp_config import McpConfigManager
-from preview_manager import PreviewManager
-from project_config import get_project_config, get_custom_instructions, set_custom_instructions
-from session_manager import SessionManager
+from .auth import verify_token
+from .config import load_config, get_working_dir, get_host, get_port, print_startup_banner, UPLOADS_DIR, LOG_DIR, WORKTREES_DIR, RELEASES_DIR
+from .git_utils import get_current_branch, is_git_repo, create_worktree, remove_worktree
+from .agent_manager import AgentManager
+from .mcp_catalog import get_catalog
+from .mcp_config import McpConfigManager
+from .preview_manager import PreviewManager
+from .project_config import get_project_config, get_custom_instructions, set_custom_instructions
+from .session_manager import SessionManager
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -600,7 +600,7 @@ async def list_mcp_servers(authorization: str = Header(None)):
 async def add_mcp_server(request: McpServerRequest, authorization: str = Header(None)):
     """Add a new MCP server."""
     _verify_rest_auth(authorization)
-    from mcp_config import McpServer
+    from .mcp_config import McpServer
     server = McpServer(
         name=request.name,
         display_name=request.display_name or request.name,
@@ -710,7 +710,7 @@ async def get_agent(name: str, authorization: str = Header(None)):
 async def create_agent(request: AgentRequest, authorization: str = Header(None)):
     """Create a new agent."""
     _verify_rest_auth(authorization)
-    from agent_manager import AgentInfo
+    from .agent_manager import AgentInfo
     agent = AgentInfo(
         name=request.name,
         description=request.description,
@@ -734,7 +734,7 @@ async def create_agent(request: AgentRequest, authorization: str = Header(None))
 async def update_agent(name: str, request: AgentRequest, authorization: str = Header(None)):
     """Update an existing agent."""
     _verify_rest_auth(authorization)
-    from agent_manager import AgentInfo
+    from .agent_manager import AgentInfo
     agent = AgentInfo(
         name=request.name,
         description=request.description,
@@ -887,7 +887,7 @@ async def _handle_message(websocket: WebSocket, msg: dict):
         return
 
     # Validate conversation_id format before using it in file paths
-    from session_manager import CONVERSATION_ID_PATTERN
+    from .session_manager import CONVERSATION_ID_PATTERN
     if conversation_id and not CONVERSATION_ID_PATTERN.match(conversation_id):
         await _send(websocket, {"type": "error", "detail": "Invalid conversation ID format"})
         return
@@ -1223,13 +1223,7 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
 
         new_session_id = session_id
 
-        client_gone = False
-
         async for raw_line in process.stdout:
-            if not client_gone and websocket.client_state != WebSocketState.CONNECTED:
-                logger.info("Client disconnected during streaming — continuing to capture response")
-                client_gone = True
-
             line = raw_line.decode().strip()
             if not line:
                 continue
@@ -1250,9 +1244,8 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
                     extra = f" blocks={blocks}"
                 logger.info(f"stream-json event: {evt_type}{extra}")
 
-            # Forward events to the client if still connected
-            if not client_gone:
-                await forwarder.forward(websocket, event, conversation_id)
+            # Forward events to the latest connected client (survives reconnects)
+            await forwarder.forward_to_client(event, conversation_id)
 
             # Accumulate ALL text into a single string for history — one response = one entry.
             # IMPORTANT: Only use ONE source of text — content_block_delta (streaming) OR
@@ -1291,12 +1284,11 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
                 # Fall back: if no assistant events produced text, use result text
                 if not accumulated_text and event.get("result"):
                     accumulated_text = event["result"]
-                    if not client_gone:
-                        await _send(websocket, {
-                            "type": "text_delta",
-                            "text": accumulated_text,
-                            "conversation_id": conversation_id,
-                        })
+                    await _send_to_client({
+                        "type": "text_delta",
+                        "text": accumulated_text,
+                        "conversation_id": conversation_id,
+                    })
 
         await process.wait()
 
@@ -1312,8 +1304,7 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
         if result_is_error and session_id and not accumulated_text:
             logger.info(f"Resume failed for {conversation_id} — clearing session and retrying")
             sessions.update_session_id(conversation_id, None)
-            if websocket.client_state == WebSocketState.CONNECTED:
-                await _send(websocket, {"type": "error", "detail": "Session expired, retrying..."})
+            await _send_to_client({"type": "error", "detail": "Session expired, retrying..."})
             # Retry without --resume (recursive call with session_id=None)
             await _run_claude(websocket, text, conversation_id, session_id=None, is_first_turn=True, cwd=cwd)
             return
@@ -1329,33 +1320,31 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
         if accumulated_text.strip() or forwarder.image_paths:
             sessions.append_history(conversation_id, history_entry)
 
-        if websocket.client_state == WebSocketState.CONNECTED:
-            complete_msg = {
-                "type": "message_complete",
-                "conversation_id": conversation_id,
-                "session_id": new_session_id,
-            }
-            # Include current git branch so the client can update mid-session
-            conv_info = sessions.get_conversation(conversation_id)
-            if conv_info and conv_info.git_worktree_path:
-                complete_msg["git_branch"] = f"conn/{conversation_id}"
-            else:
-                effective_cwd = cwd or get_working_dir()
-                branch = get_current_branch(effective_cwd)
-                if branch:
-                    complete_msg["git_branch"] = branch
-            await _send(websocket, complete_msg)
+        complete_msg = {
+            "type": "message_complete",
+            "conversation_id": conversation_id,
+            "session_id": new_session_id,
+        }
+        # Include current git branch so the client can update mid-session
+        conv_info = sessions.get_conversation(conversation_id)
+        if conv_info and conv_info.git_worktree_path:
+            complete_msg["git_branch"] = f"conn/{conversation_id}"
+        else:
+            effective_cwd = cwd or get_working_dir()
+            branch = get_current_branch(effective_cwd)
+            if branch:
+                complete_msg["git_branch"] = branch
+        await _send_to_client(complete_msg)
 
         # Generate AI summary for new conversations (first turn only)
         logger.info(f"Summary check: is_first_turn={is_first_turn}, new_session_id={new_session_id!r}")
         if is_first_turn and new_session_id:
             logger.info(f"Triggering summary generation for {conversation_id}")
-            asyncio.create_task(_generate_summary(websocket, conversation_id))
+            asyncio.create_task(_generate_summary(conversation_id))
 
     except Exception as e:
         logger.exception(f"claude subprocess error: {e}")
-        if websocket.client_state == WebSocketState.CONNECTED:
-            await _send(websocket, {"type": "error", "detail": str(e)})
+        await _send_to_client({"type": "error", "detail": str(e)})
     finally:
         active_processes.pop(conversation_id, None)
         # Clean up temp MCP config file
@@ -1370,7 +1359,7 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
             conversation_locks.pop(conversation_id, None)
 
 
-async def _generate_summary(websocket: WebSocket, conversation_id: str):
+async def _generate_summary(conversation_id: str):
     """Generate a short AI title for a new conversation, replacing the raw first-message name."""
     try:
         history = sessions.get_history(conversation_id)
@@ -1413,7 +1402,7 @@ async def _generate_summary(websocket: WebSocket, conversation_id: str):
             sessions.rename_conversation(conversation_id, summary)
             logger.info(f"Renamed conversation {conversation_id}: {summary}")
 
-            await _send(websocket, {
+            await _send_to_client({
                 "type": "conversation_renamed",
                 "conversation_id": conversation_id,
                 "name": summary,
@@ -1452,6 +1441,16 @@ class EventForwarder:
         self._cwd = cwd  # Working directory of the Claude subprocess
 
     async def forward(self, websocket: WebSocket, event: dict, conversation_id: str) -> dict | None:
+        """Forward event to a specific WebSocket (used by send-image and tests)."""
+        async def sender(data: dict):
+            await _send(websocket, data)
+        return await self._forward_impl(sender, event, conversation_id)
+
+    async def forward_to_client(self, event: dict, conversation_id: str) -> dict | None:
+        """Forward event to the latest connected client (survives reconnects)."""
+        return await self._forward_impl(_send_to_client, event, conversation_id)
+
+    async def _forward_impl(self, sender, event: dict, conversation_id: str) -> dict | None:
         event_type = event.get("type")
 
         if event_type == "content_block_start":
@@ -1472,7 +1471,7 @@ class EventForwarder:
                         "input_summary": summary,
                         "conversation_id": conversation_id,
                     }
-                    await _send(websocket, out)
+                    await sender(out)
                     return out
                 # Otherwise wait for input_json_delta to build the summary
             return None
@@ -1494,7 +1493,7 @@ class EventForwarder:
                         "input_summary": summary,
                         "conversation_id": conversation_id,
                     }
-                    await _send(websocket, start_out)
+                    await sender(start_out)
 
                 # Detect screenshot tools and emit image event
                 if self._active_tool_name in self.SCREENSHOT_TOOLS:
@@ -1506,7 +1505,7 @@ class EventForwarder:
                             resolved = Path(self._cwd) / image_path
                         abs_path = str(resolved.resolve())
                         self.image_paths.append(abs_path)
-                        await _send(websocket, {
+                        await sender({
                             "type": "image",
                             "path": abs_path,
                             "conversation_id": conversation_id,
@@ -1516,7 +1515,7 @@ class EventForwarder:
                 self._tool_input_json = ""
                 self._tool_start_sent = False
                 out = {"type": "tool_done", "conversation_id": conversation_id}
-                await _send(websocket, out)
+                await sender(out)
                 return out
             return None
 
@@ -1529,7 +1528,7 @@ class EventForwarder:
                     "text": delta.get("text", ""),
                     "conversation_id": conversation_id,
                 }
-                await _send(websocket, out)
+                await sender(out)
                 return out
             elif delta.get("type") == "input_json_delta" and self._active_tool_name:
                 # Accumulate tool input fragments
@@ -1547,7 +1546,7 @@ class EventForwarder:
                                 "input_summary": summary,
                                 "conversation_id": conversation_id,
                             }
-                            await _send(websocket, out)
+                            await sender(out)
                             return out
                     except json.JSONDecodeError:
                         pass  # Not valid JSON yet — keep accumulating
@@ -1566,7 +1565,7 @@ class EventForwarder:
                         "text": block["text"],
                         "conversation_id": conversation_id,
                     }
-                    await _send(websocket, out)
+                    await sender(out)
                     last_out = out
                 elif block.get("type") == "tool_use":
                     tool_name = block.get("name", "")
@@ -1577,7 +1576,7 @@ class EventForwarder:
                         "input_summary": _summarize_tool_input(tool_name, tool_input),
                         "conversation_id": conversation_id,
                     }
-                    await _send(websocket, start_out)
+                    await sender(start_out)
 
                     # Detect screenshot tools in fallback path
                     if tool_name in self.SCREENSHOT_TOOLS:
@@ -1588,14 +1587,14 @@ class EventForwarder:
                                 resolved = Path(self._cwd) / filename
                             abs_path = str(resolved.resolve())
                             self.image_paths.append(abs_path)
-                            await _send(websocket, {
+                            await sender({
                                 "type": "image",
                                 "path": abs_path,
                                 "conversation_id": conversation_id,
                             })
 
                     done_out = {"type": "tool_done", "conversation_id": conversation_id}
-                    await _send(websocket, done_out)
+                    await sender(done_out)
                     last_out = start_out
             return last_out
 
@@ -1674,13 +1673,21 @@ async def _send(websocket: WebSocket, data: dict):
         pass
 
 
+async def _send_to_client(data: dict):
+    """Send JSON to the latest connected client (survives reconnects)."""
+    if not connected_clients:
+        return
+    ws = connected_clients[-1]
+    await _send(ws, data)
+
+
 # Mount dashboard static files (after all routes to avoid path conflicts)
 app.mount("/dashboard", StaticFiles(directory=str(DASHBOARD_DIR), html=True), name="dashboard")
 
 
 if __name__ == "__main__":
     import uvicorn
-    from tls import ensure_certs
+    from .tls import ensure_certs
     cert_path, key_path = ensure_certs()
     uvicorn.run(
         app,

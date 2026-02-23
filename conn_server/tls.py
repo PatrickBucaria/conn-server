@@ -18,7 +18,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 
-from config import CONFIG_DIR
+from .config import CONFIG_DIR
 
 TLS_DIR = CONFIG_DIR / "tls"
 CERT_FILE = TLS_DIR / "server.crt"

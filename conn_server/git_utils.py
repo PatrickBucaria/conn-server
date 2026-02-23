@@ -5,7 +5,7 @@ import logging
 import subprocess
 from pathlib import Path
 
-from config import WORKTREES_DIR
+from .config import WORKTREES_DIR
 
 logger = logging.getLogger(__name__)
 

@@ -20,29 +20,51 @@ A self-hosted server that lets you interact with [Claude Code](https://docs.anth
 
 ## Quick Start
 
-### Interactive Setup
+### Install from PyPI
+
+```bash
+pipx install conn-server
+conn-server start
+```
+
+On first run, `conn-server start` will:
+1. Check that the Claude CLI is installed (guides you through installation if not)
+2. Walk you through configuration (port, projects directory)
+3. Generate TLS certificates and an auth token
+4. Ask if you want to install as a background service (launchd on macOS, systemd on Linux)
+5. Display a QR code for the mobile app
+
+**Prerequisites** (if you don't have them):
+- Python 3.10+ — download from [python.org](https://www.python.org/downloads/) or `brew install python`
+- pipx — `python3 -m pip install --user pipx && python3 -m pipx ensurepath` (restart terminal after)
+- Node.js — download from [nodejs.org](https://nodejs.org/) (needed for Claude CLI)
+- Claude CLI — `npm install -g @anthropic-ai/claude-code && claude` (to authenticate)
+
+### CLI Commands
+
+```bash
+conn-server start     # Start the server (interactive setup on first run)
+conn-server stop      # Stop the background service
+conn-server restart   # Restart the background service
+conn-server status    # Show server status and health
+conn-server setup     # Reconfigure (port, projects directory, auth token)
+conn-server upgrade   # Upgrade to latest version and restart
+conn-server qr        # Show the connection QR code
+conn-server config    # Show current configuration
+conn-server logs      # Show recent server logs
+conn-server logs -f   # Follow logs in real time
+conn-server version   # Show version
+```
+
+### Developer Setup (from source)
+
+If you're contributing or want to run from the repo:
 
 ```bash
 ./setup.sh
 ```
 
-This will:
-1. Check Python and Claude CLI are installed
-2. Create a virtual environment and install dependencies
-3. Walk you through server configuration (projects directory, port, auth token)
-4. Optionally install as a system service (launchd on macOS, systemd on Linux)
-5. Print connection info and a QR code for the mobile app
-
-### Manual Setup
-
-```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-python server.py
-```
-
-On first run, the server generates a config file at `~/.conn/config.json` with a random auth token and TLS certificates at `~/.conn/tls/`.
+This creates a virtual environment, installs dependencies via `pip install -e .`, walks through configuration, and optionally installs the system service. The `setup.sh` script also handles Homebrew Python detection on macOS for OpenSSL compatibility.
 
 ## Configuration
 
@@ -124,6 +146,28 @@ rm -rf ~/.conn/tls/
 ```
 
 **macOS note**: System Python links against LibreSSL, which has TLS handshake issues with Android's BoringSSL. Use Homebrew Python (`brew install python`) instead. The setup script handles this automatically.
+
+## Project Structure
+
+The server is packaged as `conn-server` on PyPI. Source code lives in the `conn_server/` package:
+
+```
+conn_server/
+├── __init__.py          # Package version
+├── cli.py               # CLI entry point (conn-server command)
+├── server.py            # FastAPI app, WebSocket + REST endpoints
+├── config.py            # Config management (~/.conn/config.json)
+├── tls.py               # EC P-256 cert generation, fingerprint, DER export
+├── auth.py              # Bearer token verification
+├── session_manager.py   # Conversation tracking, JSONL history
+├── agent_manager.py     # Claude subprocess management
+├── mcp_config.py        # MCP server configuration
+├── mcp_catalog.py       # MCP tool catalog
+├── preview_manager.py   # Background dev server management
+├── project_config.py    # Per-project settings
+├── git_utils.py         # Git utilities
+└── dashboard/           # Web dashboard static files
+```
 
 ## Testing
 

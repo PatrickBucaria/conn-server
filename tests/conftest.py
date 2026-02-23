@@ -7,9 +7,6 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-# Add the server root to sys.path so tests can import source modules
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
 import pytest
 
 
@@ -54,25 +51,25 @@ def tmp_config_dir(tmp_path):
 
     # Patch in both config and session_manager modules, since session_manager
     # imports SESSIONS_FILE and HISTORY_DIR at the top level.
-    with patch("config.CONFIG_DIR", tmp_path), \
-         patch("config.CONFIG_FILE", config_file), \
-         patch("config.SESSIONS_FILE", sessions_file), \
-         patch("config.HISTORY_DIR", history_dir), \
-         patch("config.UPLOADS_DIR", uploads_dir), \
-         patch("config.LOG_DIR", log_dir), \
-         patch("config.WORKTREES_DIR", worktrees_dir), \
-         patch("config.WORKING_DIR", str(tmp_path / "projects")), \
-         patch("session_manager.SESSIONS_FILE", sessions_file), \
-         patch("session_manager.HISTORY_DIR", history_dir), \
-         patch("mcp_config.MCP_SERVERS_FILE", mcp_servers_file), \
-         patch("agent_manager.AGENTS_DIR", agents_dir), \
-         patch("config.RELEASES_DIR", releases_dir), \
-         patch("config.PROJECTS_CONFIG_DIR", projects_config_dir), \
-         patch("project_config.PROJECTS_CONFIG_DIR", projects_config_dir), \
-         patch("server.UPLOADS_DIR", uploads_dir), \
-         patch("server.RELEASES_DIR", releases_dir), \
-         patch("server.LOG_DIR", log_dir), \
-         patch("git_utils.WORKTREES_DIR", worktrees_dir):
+    with patch("conn_server.config.CONFIG_DIR", tmp_path), \
+         patch("conn_server.config.CONFIG_FILE", config_file), \
+         patch("conn_server.config.SESSIONS_FILE", sessions_file), \
+         patch("conn_server.config.HISTORY_DIR", history_dir), \
+         patch("conn_server.config.UPLOADS_DIR", uploads_dir), \
+         patch("conn_server.config.LOG_DIR", log_dir), \
+         patch("conn_server.config.WORKTREES_DIR", worktrees_dir), \
+         patch("conn_server.config.WORKING_DIR", str(tmp_path / "projects")), \
+         patch("conn_server.session_manager.SESSIONS_FILE", sessions_file), \
+         patch("conn_server.session_manager.HISTORY_DIR", history_dir), \
+         patch("conn_server.mcp_config.MCP_SERVERS_FILE", mcp_servers_file), \
+         patch("conn_server.agent_manager.AGENTS_DIR", agents_dir), \
+         patch("conn_server.config.RELEASES_DIR", releases_dir), \
+         patch("conn_server.config.PROJECTS_CONFIG_DIR", projects_config_dir), \
+         patch("conn_server.project_config.PROJECTS_CONFIG_DIR", projects_config_dir), \
+         patch("conn_server.server.UPLOADS_DIR", uploads_dir), \
+         patch("conn_server.server.RELEASES_DIR", releases_dir), \
+         patch("conn_server.server.LOG_DIR", log_dir), \
+         patch("conn_server.git_utils.WORKTREES_DIR", worktrees_dir):
         yield {
             "dir": tmp_path,
             "token": token,

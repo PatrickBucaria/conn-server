@@ -10,9 +10,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from httpx import AsyncClient, ASGITransport
 
-from preview_manager import PreviewManager, PREVIEW_PORT_MIN, PREVIEW_PORT_MAX
-from server import app
-from session_manager import SessionManager
+from conn_server.preview_manager import PreviewManager, PREVIEW_PORT_MIN, PREVIEW_PORT_MAX
+from conn_server.server import app
+from conn_server.session_manager import SessionManager
 
 
 # ---- PreviewManager unit tests ----
@@ -215,8 +215,8 @@ class TestPreviewManagerLifecycle:
 
 @pytest.fixture
 def test_client(tmp_config_dir):
-    with patch("server.sessions", SessionManager()), \
-         patch("server.previews", PreviewManager()):
+    with patch("conn_server.server.sessions", SessionManager()), \
+         patch("conn_server.server.previews", PreviewManager()):
         transport = ASGITransport(app=app)
         yield AsyncClient(transport=transport, base_url="http://test")
 
@@ -276,7 +276,7 @@ class TestPreviewEndpoints:
         project_dir = tmp_config_dir["projects_dir"] / "web-app"
         project_dir.mkdir()
         (project_dir / "index.html").write_text("<html></html>")
-        from server import sessions
+        from conn_server.server import sessions
         sessions.create_conversation("check-conv", "Test", working_dir=str(project_dir))
         async with test_client as client:
             response = await client.get("/preview/check/check-conv", headers=headers)
@@ -287,7 +287,7 @@ class TestPreviewEndpoints:
     async def test_check_preview_false(self, test_client, headers, tmp_config_dir):
         project_dir = tmp_config_dir["projects_dir"] / "no-web"
         project_dir.mkdir()
-        from server import sessions
+        from conn_server.server import sessions
         sessions.create_conversation("no-web-conv", "Test", working_dir=str(project_dir))
         async with test_client as client:
             response = await client.get("/preview/check/no-web-conv", headers=headers)
@@ -316,7 +316,7 @@ class TestPreviewEndpoints:
 
         async with test_client as client:
             # Create a conversation first (via the conversations endpoint pattern)
-            from server import sessions
+            from conn_server.server import sessions
             sessions.create_conversation("test-conv", "Test", working_dir=str(project_dir))
 
             # Start preview

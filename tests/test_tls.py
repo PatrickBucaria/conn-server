@@ -2,12 +2,8 @@
 
 import base64
 import hashlib
-import os
-import sys
 from pathlib import Path
 from unittest.mock import patch
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
 from cryptography import x509
@@ -19,10 +15,10 @@ def test_ensure_certs_generates_on_first_run(tmp_path):
     cert_file = tmp_path / "tls" / "server.crt"
     key_file = tmp_path / "tls" / "server.key"
 
-    with patch("tls.TLS_DIR", tmp_path / "tls"), \
-         patch("tls.CERT_FILE", cert_file), \
-         patch("tls.KEY_FILE", key_file):
-        from tls import ensure_certs
+    with patch("conn_server.tls.TLS_DIR", tmp_path / "tls"), \
+         patch("conn_server.tls.CERT_FILE", cert_file), \
+         patch("conn_server.tls.KEY_FILE", key_file):
+        from conn_server.tls import ensure_certs
         c, k = ensure_certs()
 
     assert c.exists()
@@ -36,10 +32,10 @@ def test_ensure_certs_reuses_existing(tmp_path):
     cert_file = tmp_path / "tls" / "server.crt"
     key_file = tmp_path / "tls" / "server.key"
 
-    with patch("tls.TLS_DIR", tmp_path / "tls"), \
-         patch("tls.CERT_FILE", cert_file), \
-         patch("tls.KEY_FILE", key_file):
-        from tls import ensure_certs
+    with patch("conn_server.tls.TLS_DIR", tmp_path / "tls"), \
+         patch("conn_server.tls.CERT_FILE", cert_file), \
+         patch("conn_server.tls.KEY_FILE", key_file):
+        from conn_server.tls import ensure_certs
         ensure_certs()
         mtime1 = cert_file.stat().st_mtime
 
@@ -54,10 +50,10 @@ def test_cert_is_ec_p256(tmp_path):
     cert_file = tmp_path / "tls" / "server.crt"
     key_file = tmp_path / "tls" / "server.key"
 
-    with patch("tls.TLS_DIR", tmp_path / "tls"), \
-         patch("tls.CERT_FILE", cert_file), \
-         patch("tls.KEY_FILE", key_file):
-        from tls import ensure_certs
+    with patch("conn_server.tls.TLS_DIR", tmp_path / "tls"), \
+         patch("conn_server.tls.CERT_FILE", cert_file), \
+         patch("conn_server.tls.KEY_FILE", key_file):
+        from conn_server.tls import ensure_certs
         ensure_certs()
 
     cert = x509.load_pem_x509_certificate(cert_file.read_bytes())
@@ -71,10 +67,10 @@ def test_cert_has_san_localhost(tmp_path):
     cert_file = tmp_path / "tls" / "server.crt"
     key_file = tmp_path / "tls" / "server.key"
 
-    with patch("tls.TLS_DIR", tmp_path / "tls"), \
-         patch("tls.CERT_FILE", cert_file), \
-         patch("tls.KEY_FILE", key_file):
-        from tls import ensure_certs
+    with patch("conn_server.tls.TLS_DIR", tmp_path / "tls"), \
+         patch("conn_server.tls.CERT_FILE", cert_file), \
+         patch("conn_server.tls.KEY_FILE", key_file):
+        from conn_server.tls import ensure_certs
         ensure_certs()
 
     cert = x509.load_pem_x509_certificate(cert_file.read_bytes())
@@ -88,10 +84,10 @@ def test_fingerprint_format(tmp_path):
     cert_file = tmp_path / "tls" / "server.crt"
     key_file = tmp_path / "tls" / "server.key"
 
-    with patch("tls.TLS_DIR", tmp_path / "tls"), \
-         patch("tls.CERT_FILE", cert_file), \
-         patch("tls.KEY_FILE", key_file):
-        from tls import ensure_certs, get_cert_fingerprint
+    with patch("conn_server.tls.TLS_DIR", tmp_path / "tls"), \
+         patch("conn_server.tls.CERT_FILE", cert_file), \
+         patch("conn_server.tls.KEY_FILE", key_file):
+        from conn_server.tls import ensure_certs, get_cert_fingerprint
         ensure_certs()
         fp = get_cert_fingerprint()
 
@@ -109,10 +105,10 @@ def test_der_b64_roundtrips(tmp_path):
     cert_file = tmp_path / "tls" / "server.crt"
     key_file = tmp_path / "tls" / "server.key"
 
-    with patch("tls.TLS_DIR", tmp_path / "tls"), \
-         patch("tls.CERT_FILE", cert_file), \
-         patch("tls.KEY_FILE", key_file):
-        from tls import ensure_certs, get_cert_der_b64
+    with patch("conn_server.tls.TLS_DIR", tmp_path / "tls"), \
+         patch("conn_server.tls.CERT_FILE", cert_file), \
+         patch("conn_server.tls.KEY_FILE", key_file):
+        from conn_server.tls import ensure_certs, get_cert_der_b64
         ensure_certs()
         der_b64 = get_cert_der_b64()
 
@@ -126,10 +122,10 @@ def test_der_b64_size_fits_qr(tmp_path):
     cert_file = tmp_path / "tls" / "server.crt"
     key_file = tmp_path / "tls" / "server.key"
 
-    with patch("tls.TLS_DIR", tmp_path / "tls"), \
-         patch("tls.CERT_FILE", cert_file), \
-         patch("tls.KEY_FILE", key_file):
-        from tls import ensure_certs, get_cert_der_b64
+    with patch("conn_server.tls.TLS_DIR", tmp_path / "tls"), \
+         patch("conn_server.tls.CERT_FILE", cert_file), \
+         patch("conn_server.tls.KEY_FILE", key_file):
+        from conn_server.tls import ensure_certs, get_cert_der_b64
         ensure_certs()
         der_b64 = get_cert_der_b64()
 
@@ -143,10 +139,10 @@ def test_fingerprint_from_der_b64_matches(tmp_path):
     cert_file = tmp_path / "tls" / "server.crt"
     key_file = tmp_path / "tls" / "server.key"
 
-    with patch("tls.TLS_DIR", tmp_path / "tls"), \
-         patch("tls.CERT_FILE", cert_file), \
-         patch("tls.KEY_FILE", key_file):
-        from tls import ensure_certs, get_cert_fingerprint, get_cert_der_b64, get_cert_fingerprint_from_der_b64
+    with patch("conn_server.tls.TLS_DIR", tmp_path / "tls"), \
+         patch("conn_server.tls.CERT_FILE", cert_file), \
+         patch("conn_server.tls.KEY_FILE", key_file):
+        from conn_server.tls import ensure_certs, get_cert_fingerprint, get_cert_der_b64, get_cert_fingerprint_from_der_b64
         ensure_certs()
         fp_from_pem = get_cert_fingerprint()
         der_b64 = get_cert_der_b64()

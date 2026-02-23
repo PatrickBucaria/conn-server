@@ -2,8 +2,8 @@
 
 import pytest
 
-from mcp_catalog import CATALOG, get_catalog, CatalogEntry, CredentialField
-from mcp_config import McpConfigManager, McpServer
+from conn_server.mcp_catalog import CATALOG, get_catalog, CatalogEntry, CredentialField
+from conn_server.mcp_config import McpConfigManager, McpServer
 
 
 class TestCatalogData:

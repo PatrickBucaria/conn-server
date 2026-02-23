@@ -5,7 +5,7 @@ import os
 
 import pytest
 
-from mcp_config import McpConfigManager, McpServer
+from conn_server.mcp_config import McpConfigManager, McpServer
 
 
 class TestMcpConfigManager:
@@ -241,19 +241,19 @@ class TestSessionManagerMcpServers:
     """MCP server fields on Conversation objects."""
 
     def test_create_conversation_with_mcp_servers(self, tmp_config_dir):
-        from session_manager import SessionManager
+        from conn_server.session_manager import SessionManager
         sm = SessionManager()
         conv = sm.create_conversation("conv_1", "Test", mcp_servers=["sentry", "github"])
         assert conv.mcp_servers == ["sentry", "github"]
 
     def test_create_conversation_default_mcp_servers(self, tmp_config_dir):
-        from session_manager import SessionManager
+        from conn_server.session_manager import SessionManager
         sm = SessionManager()
         conv = sm.create_conversation("conv_1", "Test")
         assert conv.mcp_servers is None
 
     def test_update_mcp_servers(self, tmp_config_dir):
-        from session_manager import SessionManager
+        from conn_server.session_manager import SessionManager
         sm = SessionManager()
         sm.create_conversation("conv_1", "Test")
         result = sm.update_mcp_servers("conv_1", ["postgres"])
@@ -262,12 +262,12 @@ class TestSessionManagerMcpServers:
         assert conv.mcp_servers == ["postgres"]
 
     def test_update_mcp_servers_not_found(self, tmp_config_dir):
-        from session_manager import SessionManager
+        from conn_server.session_manager import SessionManager
         sm = SessionManager()
         assert sm.update_mcp_servers("nonexistent", ["sentry"]) is False
 
     def test_mcp_servers_persist_across_instances(self, tmp_config_dir):
-        from session_manager import SessionManager
+        from conn_server.session_manager import SessionManager
         sm1 = SessionManager()
         sm1.create_conversation("conv_1", "Test", mcp_servers=["sentry"])
         sm2 = SessionManager()
@@ -276,7 +276,7 @@ class TestSessionManagerMcpServers:
 
     def test_backward_compatibility_no_mcp_servers(self, tmp_config_dir):
         """Existing sessions.json without mcp_servers should load fine."""
-        from session_manager import SessionManager
+        from conn_server.session_manager import SessionManager
         sessions_file = tmp_config_dir["sessions_file"]
         data = {
             "conversations": [{

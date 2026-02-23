@@ -11,7 +11,7 @@ import tempfile
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
 
-from config import CONFIG_DIR
+from .config import CONFIG_DIR
 
 MCP_SERVERS_FILE = CONFIG_DIR / "mcp_servers.json"
 

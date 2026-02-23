@@ -2,7 +2,7 @@
 
 import hmac
 
-from config import get_auth_token
+from .config import get_auth_token
 
 
 def verify_token(token: str) -> bool:

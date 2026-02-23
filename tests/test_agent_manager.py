@@ -2,7 +2,7 @@
 
 import pytest
 
-from agent_manager import AgentManager, AgentInfo, _parse_frontmatter
+from conn_server.agent_manager import AgentManager, AgentInfo, _parse_frontmatter
 
 
 class TestParseFrontmatter:

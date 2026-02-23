@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
-from config import SESSIONS_FILE, HISTORY_DIR
+from .config import SESSIONS_FILE, HISTORY_DIR
 
 # Conversation IDs must be alphanumeric with hyphens/underscores (used in file paths)
 CONVERSATION_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$")

@@ -249,7 +249,7 @@ fi
 if [ ! -d "$VENV_DIR" ]; then
   "$PYTHON_BIN" -m venv "$VENV_DIR"
 fi
-"$VENV_DIR/bin/pip" install -q --disable-pip-version-check -r "$PROJECT_ROOT/requirements.txt"
+"$VENV_DIR/bin/pip" install -q --disable-pip-version-check -e "$PROJECT_ROOT"
 success "Python environment ready"
 echo ""
 
@@ -314,9 +314,7 @@ success "Config saved to $CONFIG_FILE"
 echo ""
 info "Generating TLS certificate..."
 "$VENV_DIR/bin/python3" -c "
-import sys
-sys.path.insert(0, '$PROJECT_ROOT')
-from tls import ensure_certs, get_cert_fingerprint
+from conn_server.tls import ensure_certs, get_cert_fingerprint
 ensure_certs()
 print(get_cert_fingerprint())
 " > /tmp/conn_fingerprint 2>&1
@@ -348,7 +346,7 @@ if [ "$OS" = "Darwin" ]; then
     <key>ProgramArguments</key>
     <array>
         <string>$VENV_DIR/bin/uvicorn</string>
-        <string>server:app</string>
+        <string>conn_server.server:app</string>
         <string>--host</string>
         <string>$HOST</string>
         <string>--port</string>
@@ -397,7 +395,7 @@ PLIST
   else
     echo ""
     echo "  To start the server manually:"
-    echo "    cd $PROJECT_ROOT && ./venv/bin/uvicorn server:app --host $HOST --port $PORT --ssl-keyfile $TLS_DIR/server.key --ssl-certfile $TLS_DIR/server.crt"
+    echo "    cd $PROJECT_ROOT && ./venv/bin/uvicorn conn_server.server:app --host $HOST --port $PORT --ssl-keyfile $TLS_DIR/server.key --ssl-certfile $TLS_DIR/server.crt"
   fi
 else
   # Linux — offer systemd
@@ -414,7 +412,7 @@ After=network.target
 Type=simple
 User=$USER
 WorkingDirectory=$PROJECT_ROOT
-ExecStart=$VENV_DIR/bin/uvicorn server:app --host $HOST --port $PORT --ssl-keyfile $TLS_DIR/server.key --ssl-certfile $TLS_DIR/server.crt
+ExecStart=$VENV_DIR/bin/uvicorn conn_server.server:app --host $HOST --port $PORT --ssl-keyfile $TLS_DIR/server.key --ssl-certfile $TLS_DIR/server.crt
 Restart=always
 RestartSec=5
 Environment=PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
@@ -443,7 +441,7 @@ SYSTEMD
   if [ ! -f "/etc/systemd/system/conn.service" ] 2>/dev/null; then
     echo ""
     echo "  To start the server manually:"
-    echo "    cd $PROJECT_ROOT && ./venv/bin/uvicorn server:app --host $HOST --port $PORT --ssl-keyfile $TLS_DIR/server.key --ssl-certfile $TLS_DIR/server.crt"
+    echo "    cd $PROJECT_ROOT && ./venv/bin/uvicorn conn_server.server:app --host $HOST --port $PORT --ssl-keyfile $TLS_DIR/server.key --ssl-certfile $TLS_DIR/server.crt"
   fi
 fi
 
@@ -500,12 +498,11 @@ echo "  Projects:   $PROJECTS_DIR"
 # QR code (includes cert for zero-trust-on-first-use setup)
 # Generates both a terminal QR and an SVG file for small displays.
 "$VENV_DIR/bin/python3" -c "
-import json, io, sys, os
-sys.path.insert(0, '$PROJECT_ROOT')
+import json, io, os
 try:
     import qrcode
     from qrcode.image.svg import SvgPathImage
-    from tls import get_cert_der_b64
+    from conn_server.tls import get_cert_der_b64
     cert = get_cert_der_b64()
     data = json.dumps({'host': '$CONN_IP', 'port': $PORT, 'token': '$AUTH_TOKEN', 'cert': cert}, separators=(',', ':'))
     qr = qrcode.QRCode(box_size=1, border=2)

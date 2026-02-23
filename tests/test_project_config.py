@@ -4,9 +4,9 @@ import json
 import pytest
 from httpx import AsyncClient, ASGITransport
 
-from project_config import get_project_config, get_custom_instructions, set_custom_instructions
-from session_manager import SessionManager
-from server import app
+from conn_server.project_config import get_project_config, get_custom_instructions, set_custom_instructions
+from conn_server.session_manager import SessionManager
+from conn_server.server import app
 
 
 # --- Unit tests for project_config module ---
@@ -65,11 +65,11 @@ def test_overwrite_existing_instructions(tmp_config_dir):
 
 @pytest.fixture
 def test_client(tmp_config_dir):
-    from server import sessions as _old
+    from conn_server.server import sessions as _old
     from unittest.mock import patch
     sm = SessionManager()
     with patch.object(app, "_sessions", sm, create=True), \
-         patch("server.sessions", sm):
+         patch("conn_server.server.sessions", sm):
         yield {
             "client": AsyncClient(transport=ASGITransport(app=app), base_url="http://test"),
             "token": tmp_config_dir["token"],

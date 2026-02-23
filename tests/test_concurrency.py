@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from starlette.websockets import WebSocketState
 
-import server as srv
+import conn_server.server as srv
 
 
 @pytest.fixture(autouse=True)

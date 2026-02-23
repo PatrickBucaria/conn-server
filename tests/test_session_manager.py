@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from session_manager import SessionManager, Conversation
+from conn_server.session_manager import SessionManager, Conversation
 
 
 class TestSessionManagerConversations:
@@ -153,7 +153,7 @@ class TestSessionManagerPermissions:
     def test_backward_compatibility_no_allowed_tools(self, tmp_config_dir):
         """Existing sessions.json without allowed_tools should load fine."""
         import json
-        from config import SESSIONS_FILE
+        from conn_server.config import SESSIONS_FILE
 
         # Write a sessions.json without the allowed_tools field
         data = {"conversations": [{
@@ -219,7 +219,7 @@ class TestSessionManagerWorktree:
 
     def test_backward_compatibility_no_worktree_fields(self, tmp_config_dir):
         """Existing sessions.json without worktree fields should load fine."""
-        from config import SESSIONS_FILE
+        from conn_server.config import SESSIONS_FILE
 
         data = {"conversations": [{
             "id": "old_conv",

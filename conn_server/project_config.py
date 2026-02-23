@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from config import PROJECTS_CONFIG_DIR
+from .config import PROJECTS_CONFIG_DIR
 
 
 def _config_file(project_path: str) -> Path:

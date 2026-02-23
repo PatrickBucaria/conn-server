@@ -130,7 +130,7 @@ def _print_qr_code(host: str, port: int, token: str, cert_der_b64: str | None = 
 
 def print_startup_banner():
     """Print server connection info on startup."""
-    from tls import ensure_certs, get_cert_fingerprint, get_cert_der_b64
+    from .tls import ensure_certs, get_cert_fingerprint, get_cert_der_b64
 
     config = load_config()
     is_first_run = config.get("_is_first_run", False)

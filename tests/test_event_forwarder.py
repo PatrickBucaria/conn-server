@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from server import EventForwarder, _summarize_tool_input, _extract_screenshot_path
+from conn_server.server import EventForwarder, _summarize_tool_input, _extract_screenshot_path
 
 
 @pytest.fixture
@@ -42,7 +42,7 @@ class TestTextDeltaForwarding:
             "delta": {"type": "text_delta", "text": "Hello"},
         }
 
-        with patch("server._send", new_callable=AsyncMock) as mock_send:
+        with patch("conn_server.server._send", new_callable=AsyncMock) as mock_send:
             result = await forwarder.forward(ws, event, "conv_1")
 
         assert result is not None
@@ -58,7 +58,7 @@ class TestTextDeltaForwarding:
             "delta": {"type": "text_delta", "text": "Hi"},
         }
 
-        with patch("server._send", new_callable=AsyncMock):
+        with patch("conn_server.server._send", new_callable=AsyncMock):
             await forwarder.forward(ws, event, "conv_1")
 
         assert forwarder._saw_streaming_events is True
@@ -77,7 +77,7 @@ class TestToolUseForwarding:
             },
         }
 
-        with patch("server._send", new_callable=AsyncMock) as mock_send:
+        with patch("conn_server.server._send", new_callable=AsyncMock) as mock_send:
             result = await forwarder.forward(ws, event, "conv_1")
 
         assert result is not None
@@ -98,7 +98,7 @@ class TestToolUseForwarding:
             },
         }
 
-        with patch("server._send", new_callable=AsyncMock) as mock_send:
+        with patch("conn_server.server._send", new_callable=AsyncMock) as mock_send:
             result = await forwarder.forward(ws, event, "conv_1")
 
         # Should not have sent anything yet — waiting for input_json_delta
@@ -116,7 +116,7 @@ class TestToolUseForwarding:
             "type": "content_block_start",
             "content_block": {"type": "tool_use", "name": "Bash", "input": {}},
         }
-        with patch("server._send", new_callable=AsyncMock):
+        with patch("conn_server.server._send", new_callable=AsyncMock):
             await forwarder.forward(ws, start_event, "conv_1")
 
         # Then: input_json_delta with complete JSON
@@ -127,7 +127,7 @@ class TestToolUseForwarding:
                 "partial_json": '{"command": "ls -la"}',
             },
         }
-        with patch("server._send", new_callable=AsyncMock) as mock_send:
+        with patch("conn_server.server._send", new_callable=AsyncMock) as mock_send:
             result = await forwarder.forward(ws, delta_event, "conv_1")
 
         assert result is not None
@@ -145,7 +145,7 @@ class TestToolUseForwarding:
             "type": "content_block_start",
             "content_block": {"type": "tool_use", "name": "Read", "input": {}},
         }
-        with patch("server._send", new_callable=AsyncMock):
+        with patch("conn_server.server._send", new_callable=AsyncMock):
             await forwarder.forward(ws, start_event, "conv_1")
 
         # First partial — not enough to parse
@@ -153,7 +153,7 @@ class TestToolUseForwarding:
             "type": "content_block_delta",
             "delta": {"type": "input_json_delta", "partial_json": '{"file_'},
         }
-        with patch("server._send", new_callable=AsyncMock) as mock_send:
+        with patch("conn_server.server._send", new_callable=AsyncMock) as mock_send:
             result = await forwarder.forward(ws, delta1, "conv_1")
         assert result is None  # Can't parse yet
 
@@ -162,7 +162,7 @@ class TestToolUseForwarding:
             "type": "content_block_delta",
             "delta": {"type": "input_json_delta", "partial_json": 'path": "/tmp/'},
         }
-        with patch("server._send", new_callable=AsyncMock):
+        with patch("conn_server.server._send", new_callable=AsyncMock):
             result = await forwarder.forward(ws, delta2, "conv_1")
         assert result is None
 
@@ -171,7 +171,7 @@ class TestToolUseForwarding:
             "type": "content_block_delta",
             "delta": {"type": "input_json_delta", "partial_json": 'test.py"}'},
         }
-        with patch("server._send", new_callable=AsyncMock):
+        with patch("conn_server.server._send", new_callable=AsyncMock):
             result = await forwarder.forward(ws, delta3, "conv_1")
         assert result is not None
         assert result["input_summary"] == "/tmp/test.py"
@@ -185,7 +185,7 @@ class TestToolUseForwarding:
             "type": "content_block_start",
             "content_block": {"type": "tool_use", "name": "Glob", "input": {}},
         }
-        with patch("server._send", new_callable=AsyncMock):
+        with patch("conn_server.server._send", new_callable=AsyncMock):
             await forwarder.forward(ws, start_event, "conv_1")
 
         # content_block_stop — should send tool_start then tool_done
@@ -194,7 +194,7 @@ class TestToolUseForwarding:
         async def capture_send(ws, data):
             send_calls.append(data)
 
-        with patch("server._send", side_effect=capture_send):
+        with patch("conn_server.server._send", side_effect=capture_send):
             result = await forwarder.forward(ws, stop_event, "conv_1")
 
         assert len(send_calls) == 2
@@ -215,7 +215,7 @@ class TestToolUseForwarding:
                 "input": {"file_path": "/tmp/test.py"},
             },
         }
-        with patch("server._send", new_callable=AsyncMock):
+        with patch("conn_server.server._send", new_callable=AsyncMock):
             await forwarder.forward(ws, start_event, "conv_1")
 
         # content_block_stop — should only send tool_done
@@ -224,7 +224,7 @@ class TestToolUseForwarding:
         async def capture_send(ws, data):
             send_calls.append(data)
 
-        with patch("server._send", side_effect=capture_send):
+        with patch("conn_server.server._send", side_effect=capture_send):
             await forwarder.forward(ws, stop_event, "conv_1")
 
         assert len(send_calls) == 1
@@ -236,7 +236,7 @@ class TestToolUseForwarding:
         # Stop event when no tool is active
         event = {"type": "content_block_stop"}
 
-        with patch("server._send", new_callable=AsyncMock) as mock_send:
+        with patch("conn_server.server._send", new_callable=AsyncMock) as mock_send:
             result = await forwarder.forward(ws, event, "conv_1")
 
         assert result is None
@@ -256,7 +256,7 @@ class TestAssistantFallback:
             },
         }
 
-        with patch("server._send", new_callable=AsyncMock) as mock_send:
+        with patch("conn_server.server._send", new_callable=AsyncMock) as mock_send:
             result = await forwarder.forward(ws, event, "conv_1")
 
         assert result is not None
@@ -272,7 +272,7 @@ class TestAssistantFallback:
             "type": "content_block_delta",
             "delta": {"type": "text_delta", "text": "Hi"},
         }
-        with patch("server._send", new_callable=AsyncMock):
+        with patch("conn_server.server._send", new_callable=AsyncMock):
             await forwarder.forward(ws, delta, "conv_1")
 
         # Then get assistant event — should be ignored
@@ -282,7 +282,7 @@ class TestAssistantFallback:
                 "content": [{"type": "text", "text": "Hello from assistant"}],
             },
         }
-        with patch("server._send", new_callable=AsyncMock) as mock_send:
+        with patch("conn_server.server._send", new_callable=AsyncMock) as mock_send:
             result = await forwarder.forward(ws, assistant, "conv_1")
 
         assert result is None
@@ -305,7 +305,7 @@ class TestAssistantFallback:
         async def capture_send(ws, data):
             send_calls.append(data)
 
-        with patch("server._send", side_effect=capture_send):
+        with patch("conn_server.server._send", side_effect=capture_send):
             await forwarder.forward(ws, event, "conv_1")
 
         types = [c["type"] for c in send_calls]
@@ -336,7 +336,7 @@ class TestAssistantFallback:
         async def capture_send(ws, data):
             send_calls.append(data)
 
-        with patch("server._send", side_effect=capture_send):
+        with patch("conn_server.server._send", side_effect=capture_send):
             await fwd.forward(ws, event, "conv_1")
 
         types = [c["type"] for c in send_calls]
@@ -363,7 +363,7 @@ class TestAssistantFallback:
         async def capture_send(ws, data):
             send_calls.append(data)
 
-        with patch("server._send", side_effect=capture_send):
+        with patch("conn_server.server._send", side_effect=capture_send):
             await forwarder.forward(ws, event, "conv_1")
 
         types = [c["type"] for c in send_calls]
@@ -466,7 +466,7 @@ class TestScreenshotImageEvent:
                 "input": {},
             },
         }
-        with patch("server._send", new_callable=AsyncMock):
+        with patch("conn_server.server._send", new_callable=AsyncMock):
             await fwd.forward(ws, start_event, "conv_1")
 
         # Stream tool input with filename
@@ -477,7 +477,7 @@ class TestScreenshotImageEvent:
                 "partial_json": '{"filename": "page-screenshot.png", "type": "png"}',
             },
         }
-        with patch("server._send", new_callable=AsyncMock):
+        with patch("conn_server.server._send", new_callable=AsyncMock):
             await fwd.forward(ws, delta_event, "conv_1")
 
         # Stop the tool — should emit tool_start (if not sent), image, then tool_done
@@ -486,7 +486,7 @@ class TestScreenshotImageEvent:
         async def capture_send(ws, data):
             send_calls.append(data)
 
-        with patch("server._send", side_effect=capture_send):
+        with patch("conn_server.server._send", side_effect=capture_send):
             await fwd.forward(ws, stop_event, "conv_1")
 
         types = [c["type"] for c in send_calls]
@@ -511,7 +511,7 @@ class TestScreenshotImageEvent:
                 "input": {},
             },
         }
-        with patch("server._send", new_callable=AsyncMock):
+        with patch("conn_server.server._send", new_callable=AsyncMock):
             await fwd.forward(ws, start_event, "conv_1")
 
         # Input with filename
@@ -522,11 +522,11 @@ class TestScreenshotImageEvent:
                 "partial_json": '{"filename": "shot.png"}',
             },
         }
-        with patch("server._send", new_callable=AsyncMock):
+        with patch("conn_server.server._send", new_callable=AsyncMock):
             await fwd.forward(ws, delta_event, "conv_1")
 
         # Stop
-        with patch("server._send", new_callable=AsyncMock):
+        with patch("conn_server.server._send", new_callable=AsyncMock):
             await fwd.forward(ws, {"type": "content_block_stop"}, "conv_1")
 
         assert fwd.image_paths == [str(tmp_path / "shot.png")]
@@ -545,7 +545,7 @@ class TestScreenshotImageEvent:
                 "input": {},
             },
         }
-        with patch("server._send", new_callable=AsyncMock):
+        with patch("conn_server.server._send", new_callable=AsyncMock):
             await fwd.forward(ws, start_event, "conv_1")
 
         delta_event = {
@@ -555,10 +555,10 @@ class TestScreenshotImageEvent:
                 "partial_json": '{"filename": "/absolute/path/shot.png"}',
             },
         }
-        with patch("server._send", new_callable=AsyncMock):
+        with patch("conn_server.server._send", new_callable=AsyncMock):
             await fwd.forward(ws, delta_event, "conv_1")
 
-        with patch("server._send", new_callable=AsyncMock):
+        with patch("conn_server.server._send", new_callable=AsyncMock):
             await fwd.forward(ws, {"type": "content_block_stop"}, "conv_1")
 
         assert fwd.image_paths == ["/absolute/path/shot.png"]
@@ -576,7 +576,7 @@ class TestScreenshotImageEvent:
                 "input": {"file_path": "/tmp/test.py"},
             },
         }
-        with patch("server._send", new_callable=AsyncMock):
+        with patch("conn_server.server._send", new_callable=AsyncMock):
             await forwarder.forward(ws, start_event, "conv_1")
 
         # Stop
@@ -584,7 +584,7 @@ class TestScreenshotImageEvent:
         async def capture_send(ws, data):
             send_calls.append(data)
 
-        with patch("server._send", side_effect=capture_send):
+        with patch("conn_server.server._send", side_effect=capture_send):
             await forwarder.forward(ws, {"type": "content_block_stop"}, "conv_1")
 
         types = [c["type"] for c in send_calls]
@@ -604,7 +604,7 @@ class TestScreenshotImageEvent:
                 "input": {},
             },
         }
-        with patch("server._send", new_callable=AsyncMock):
+        with patch("conn_server.server._send", new_callable=AsyncMock):
             await forwarder.forward(ws, start_event, "conv_1")
 
         # Input without filename
@@ -615,7 +615,7 @@ class TestScreenshotImageEvent:
                 "partial_json": '{"type": "png"}',
             },
         }
-        with patch("server._send", new_callable=AsyncMock):
+        with patch("conn_server.server._send", new_callable=AsyncMock):
             await forwarder.forward(ws, delta_event, "conv_1")
 
         # Stop
@@ -623,7 +623,7 @@ class TestScreenshotImageEvent:
         async def capture_send(ws, data):
             send_calls.append(data)
 
-        with patch("server._send", side_effect=capture_send):
+        with patch("conn_server.server._send", side_effect=capture_send):
             await forwarder.forward(ws, {"type": "content_block_stop"}, "conv_1")
 
         types = [c["type"] for c in send_calls]
@@ -644,7 +644,7 @@ class TestScreenshotImageEvent:
                     "input": {},
                 },
             }
-            with patch("server._send", new_callable=AsyncMock):
+            with patch("conn_server.server._send", new_callable=AsyncMock):
                 await fwd.forward(ws, start_event, "conv_1")
 
             delta_event = {
@@ -654,10 +654,10 @@ class TestScreenshotImageEvent:
                     "partial_json": json.dumps({"filename": filename}),
                 },
             }
-            with patch("server._send", new_callable=AsyncMock):
+            with patch("conn_server.server._send", new_callable=AsyncMock):
                 await fwd.forward(ws, delta_event, "conv_1")
 
-            with patch("server._send", new_callable=AsyncMock):
+            with patch("conn_server.server._send", new_callable=AsyncMock):
                 await fwd.forward(ws, {"type": "content_block_stop"}, "conv_1")
 
         assert fwd.image_paths == [str(tmp_path / "shot1.png"), str(tmp_path / "shot2.png")]

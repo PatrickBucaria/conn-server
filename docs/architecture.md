@@ -51,18 +51,18 @@ Any tool that writes APK files in this format can publish updates. The server ju
 
 ## Configuration
 
-Server reads from `~/.conn/config.json` (run `./setup.sh` for interactive setup):
+Server reads from `~/.conn/config.json`. Run `conn-server setup` to reconfigure, or `conn-server start` for first-time interactive setup. Developers using the repo can use `./setup.sh` instead.
 
 - Auto-generates auth token on first run
 - Default port: 8443 (HTTPS)
-- Working directory: `~/Projects` (configurable via `working_dir` in config)
+- Working directory: `~/Projects` (configurable via `working_dir` in config or `conn-server setup`)
 - Environment variable overrides: `CONN_WORKING_DIR`, `CONN_PORT`, `CONN_HOST` (take precedence over config file)
 - Conversation history: `~/.conn/history/{conversation_id}.jsonl`
 - Session tracking: `~/.conn/sessions.json`
 - Image uploads: `~/.conn/uploads/{conversation_id}/`
 - App releases: `~/.conn/releases/`
-- launchd service: `~/Library/LaunchAgents/com.conn.server.plist` (macOS, installed by `setup.sh`)
-- systemd service: `/etc/systemd/system/conn.service` (Linux, installed by `setup.sh`)
+- launchd service: `~/Library/LaunchAgents/com.conn.server.plist` (macOS, installed by `conn-server start` or `setup.sh`)
+- systemd service: `/etc/systemd/system/conn.service` (Linux, installed by `conn-server start` or `setup.sh`)
 
 ## Known Pitfalls
 
@@ -73,5 +73,5 @@ Server reads from `~/.conn/config.json` (run `./setup.sh` for interactive setup)
 5. **Client disconnect during streaming**: Server continues capturing the full response even after the WebSocket disconnects, saving it to history so it's available on reconnect
 6. **Stale session IDs**: If the Claude CLI's internal session storage is cleared (e.g. CLI update), stored `--resume` session IDs become invalid. The server detects the error, clears the stored session, and auto-retries
 7. **Never run dev servers via Bash**: Long-lived server processes hang the conversation lock. Use `PreviewManager` instead
-8. **Python venv has hardcoded paths**: If the project directory is moved, the venv breaks. Fix: recreate it
-9. **launchd/systemd service**: Re-run `./setup.sh` to regenerate with new settings. Logs at `~/.conn/logs/` (macOS) or `journalctl -u conn` (Linux)
+8. **Python venv has hardcoded paths** (developer setup only): If the project directory is moved, the venv breaks. Fix: recreate it. Not applicable for PyPI installs (`pipx install conn-server`)
+9. **launchd/systemd service**: The service runs `conn-server serve` (a non-interactive internal command). Reconfigure with `conn-server setup`, restart with `conn-server restart`. Logs at `~/.conn/logs/` (macOS) or `journalctl -u conn` (Linux)

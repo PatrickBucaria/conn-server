@@ -3,7 +3,7 @@ import subprocess
 
 import pytest
 
-from git_utils import get_current_branch, is_git_repo, create_worktree, remove_worktree
+from conn_server.git_utils import get_current_branch, is_git_repo, create_worktree, remove_worktree
 
 
 def _init_git_repo(path, branch="main"):

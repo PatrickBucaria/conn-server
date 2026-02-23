@@ -8,10 +8,10 @@ from unittest.mock import patch
 import pytest
 from httpx import AsyncClient, ASGITransport
 
-from agent_manager import AgentManager
-from mcp_config import McpConfigManager
-from server import app, _validate_tool_spec
-from session_manager import SessionManager
+from conn_server.agent_manager import AgentManager
+from conn_server.mcp_config import McpConfigManager
+from conn_server.server import app, _validate_tool_spec
+from conn_server.session_manager import SessionManager
 
 
 def _init_git_repo(path, branch="main"):
@@ -29,9 +29,9 @@ def test_client(tmp_config_dir):
     """Create an async test client with patched config."""
     # Also patch the global sessions object in server module.
     # Must use yield (not return) so the patch stays active during the test.
-    with patch("server.sessions", SessionManager()), \
-         patch("server.mcp_servers", McpConfigManager()), \
-         patch("server.agents", AgentManager(agents_dir=tmp_config_dir["agents_dir"])):
+    with patch("conn_server.server.sessions", SessionManager()), \
+         patch("conn_server.server.mcp_servers", McpConfigManager()), \
+         patch("conn_server.server.agents", AgentManager(agents_dir=tmp_config_dir["agents_dir"])):
         transport = ASGITransport(app=app)
         yield AsyncClient(transport=transport, base_url="http://test")
 
@@ -107,7 +107,7 @@ class TestConversationsEndpoint:
         _init_git_repo(project_dir, branch="feature")
 
         # Create a conversation pointing to the git project
-        import server
+        import conn_server.server as server
         server.sessions.create_conversation("conv_git", "Test", working_dir=str(project_dir))
 
         async with test_client as client:
@@ -119,7 +119,7 @@ class TestConversationsEndpoint:
     @pytest.mark.asyncio
     async def test_conversations_null_branch_for_non_git(self, test_client, headers, tmp_config_dir):
         """Conversations without a git working_dir should have null git_branch."""
-        import server
+        import conn_server.server as server
         server.sessions.create_conversation("conv_plain", "Test", working_dir=str(tmp_config_dir["projects_dir"]))
 
         async with test_client as client:
