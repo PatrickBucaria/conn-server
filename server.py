@@ -16,6 +16,7 @@ from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Header, HTTPException, UploadFile, File, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 from starlette.websockets import WebSocketState
 
 from auth import verify_token
@@ -225,6 +226,60 @@ async def active_conversations(authorization: str = Header(None)):
     return {"active_conversation_ids": active_ids}
 
 
+class SendImageRequest(BaseModel):
+    path: str
+    conversation_id: str | None = None
+
+
+SEND_IMAGE_ALLOWED_ROOTS = [Path("/tmp/auto-mobile/screenshots")]
+
+
+@app.post("/send-image")
+async def send_image(req: SendImageRequest, authorization: str = Header(None)):
+    """Inject an image into a conversation's WebSocket stream.
+
+    Used by Claude Code to send screenshots (e.g. from AutoMobile) to the
+    mobile client for visual review.  If conversation_id is omitted, defaults
+    to the conversation with an active Claude process.
+    """
+    _verify_rest_auth(authorization)
+
+    file_path = Path(req.path).resolve()
+    if ".." in Path(req.path).parts:
+        raise HTTPException(status_code=400, detail="Invalid path")
+
+    if not any(file_path == root or root.resolve() in file_path.parents
+               for root in SEND_IMAGE_ALLOWED_ROOTS):
+        raise HTTPException(status_code=403, detail="Path outside allowed directories")
+
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    ext = file_path.suffix.lower()
+    if ext not in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
+        raise HTTPException(status_code=403, detail=f"File type not allowed: {ext}")
+
+    # Resolve conversation_id — default to the active one
+    conv_id = req.conversation_id
+    if not conv_id:
+        active_ids = [cid for cid, proc in active_processes.items() if proc.returncode is None]
+        if len(active_ids) == 1:
+            conv_id = active_ids[0]
+        elif len(active_ids) == 0:
+            raise HTTPException(status_code=404, detail="No active conversation")
+        else:
+            raise HTTPException(status_code=409, detail="Multiple active conversations — specify conversation_id")
+
+    # Broadcast image + message_complete so the client finalizes the message
+    image_event = {"type": "image", "path": req.path, "conversation_id": conv_id}
+    complete_event = {"type": "message_complete", "conversation_id": conv_id}
+    for ws in list(connected_clients):
+        await _send(ws, image_event)
+        await _send(ws, complete_event)
+
+    return {"ok": True, "conversation_id": conv_id}
+
+
 @app.get("/projects")
 async def list_projects(authorization: str = Header(None)):
     """List subdirectories of the projects root as available project contexts."""
@@ -237,9 +292,6 @@ async def list_projects(authorization: str = Header(None)):
         if entry.is_dir() and not entry.name.startswith("."):
             projects.append({"name": entry.name, "path": str(entry), "git_branch": get_current_branch(str(entry))})
     return {"projects": projects}
-
-
-from pydantic import BaseModel
 
 
 class CreateProjectRequest(BaseModel):

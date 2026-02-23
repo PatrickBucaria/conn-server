@@ -859,3 +859,94 @@ class TestAgentsEndpoint:
                 "name": "reviewer", "description": "test",
             })
         assert response.status_code == 401
+
+
+class TestSendImageEndpoint:
+    @pytest.mark.asyncio
+    async def test_requires_auth(self, test_client):
+        async with test_client as client:
+            response = await client.post("/send-image", json={"path": "/tmp/auto-mobile/screenshots/test.png"})
+        assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_rejects_path_outside_allowed_dir(self, test_client, headers):
+        async with test_client as client:
+            response = await client.post("/send-image", json={"path": "/etc/passwd"}, headers=headers)
+        assert response.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_rejects_path_traversal(self, test_client, headers):
+        async with test_client as client:
+            response = await client.post(
+                "/send-image",
+                json={"path": "/tmp/auto-mobile/screenshots/../../etc/passwd"},
+                headers=headers,
+            )
+        assert response.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_rejects_nonexistent_file(self, test_client, headers):
+        async with test_client as client:
+            response = await client.post(
+                "/send-image",
+                json={"path": "/tmp/auto-mobile/screenshots/nonexistent.png"},
+                headers=headers,
+            )
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_rejects_non_image_extension(self, test_client, headers, tmp_path):
+        # Create a real file with a disallowed extension
+        screenshots_dir = Path("/tmp/auto-mobile/screenshots")
+        screenshots_dir.mkdir(parents=True, exist_ok=True)
+        test_file = screenshots_dir / "test_bad_ext.txt"
+        test_file.write_text("not an image")
+        try:
+            async with test_client as client:
+                response = await client.post(
+                    "/send-image",
+                    json={"path": str(test_file)},
+                    headers=headers,
+                )
+            assert response.status_code == 403
+        finally:
+            test_file.unlink(missing_ok=True)
+
+    @pytest.mark.asyncio
+    async def test_no_active_conversation_returns_404(self, test_client, headers):
+        # No conversation_id provided and no active processes
+        screenshots_dir = Path("/tmp/auto-mobile/screenshots")
+        screenshots_dir.mkdir(parents=True, exist_ok=True)
+        test_file = screenshots_dir / "test_no_conv.png"
+        test_file.write_bytes(b"\x89PNG")
+        try:
+            async with test_client as client:
+                response = await client.post(
+                    "/send-image",
+                    json={"path": str(test_file)},
+                    headers=headers,
+                )
+            assert response.status_code == 404
+            assert "No active conversation" in response.json()["detail"]
+        finally:
+            test_file.unlink(missing_ok=True)
+
+    @pytest.mark.asyncio
+    async def test_success_with_explicit_conversation_id(self, test_client, headers):
+        screenshots_dir = Path("/tmp/auto-mobile/screenshots")
+        screenshots_dir.mkdir(parents=True, exist_ok=True)
+        test_file = screenshots_dir / "test_success.png"
+        test_file.write_bytes(b"\x89PNG")
+        try:
+            async with test_client as client:
+                response = await client.post(
+                    "/send-image",
+                    json={"path": str(test_file), "conversation_id": "conv_123"},
+                    headers=headers,
+                )
+            assert response.status_code == 200
+            data = response.json()
+            assert data["ok"] is True
+            assert data["conversation_id"] == "conv_123"
+        finally:
+            test_file.unlink(missing_ok=True)

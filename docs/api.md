@@ -23,6 +23,7 @@ All endpoints require `Authorization: Bearer {token}` unless noted.
 | `GET` | `/update/releases` | List all available builds (returns `{releases: [...]}`) |
 | `GET` | `/update/download` | Download latest APK. Auth via header or `?token=` query param |
 | `GET` | `/update/download/{filename}` | Download specific APK by filename. Auth via header or `?token=` query param |
+| `POST` | `/send-image` | Inject an image into a conversation's WebSocket stream (`{"path": "...", "conversation_id": "..."}`) |
 | `POST` | `/restart` | Gracefully restart server (kills all active Claude processes and preview servers, launchd restarts) |
 
 ## WebSocket Protocol
