@@ -1153,7 +1153,7 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
         cmd = [
             "claude", "-p", text,
             "--output-format", "stream-json",
-            "--max-turns", "50",
+            "--max-turns", "200",
             "--verbose",
             "--agent", conv.agent,
             "--append-system-prompt", conn_system_prompt,
@@ -1166,7 +1166,7 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
             "--output-format", "stream-json",
             "--tools", tools,
             "--allowedTools", tools,
-            "--max-turns", "50",
+            "--max-turns", "200",
             "--verbose",
             "--append-system-prompt", conn_system_prompt,
         ]
