@@ -14,7 +14,6 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Header, HTTPException, UploadFile, File, Query
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from starlette.websockets import WebSocketState
@@ -63,16 +62,6 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
-
-# ---------- Dashboard static files ----------
-
-DASHBOARD_DIR = Path(__file__).parent / "dashboard"
-
-
-@app.get("/")
-async def root():
-    """Redirect root to dashboard."""
-    return FileResponse(DASHBOARD_DIR / "index.html")
 
 
 # ---------- REST endpoints ----------
@@ -1670,10 +1659,6 @@ async def _send_to_client(data: dict):
         return
     ws = connected_clients[-1]
     await _send(ws, data)
-
-
-# Mount dashboard static files (after all routes to avoid path conflicts)
-app.mount("/dashboard", StaticFiles(directory=str(DASHBOARD_DIR), html=True), name="dashboard")
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ generates temporary --mcp-config files for Claude CLI invocations.
 from __future__ import annotations
 
 import json
+import os
 import re
 import tempfile
 from dataclasses import dataclass, asdict, field
@@ -50,9 +51,13 @@ class McpConfigManager:
 
     def _save(self):
         data = {"servers": [asdict(s) for s in self._servers.values()]}
-        MCP_SERVERS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(MCP_SERVERS_FILE, "w") as f:
-            json.dump(data, f, indent=2)
+        MCP_SERVERS_FILE.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        content = json.dumps(data, indent=2)
+        fd = os.open(str(MCP_SERVERS_FILE), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, content.encode())
+        finally:
+            os.close(fd)
 
     def list_servers(self) -> list[dict]:
         """List all servers with env values masked."""
@@ -147,16 +152,16 @@ class McpConfigManager:
 
         config = {"mcpServers": mcp_servers}
 
-        # Write to a temp file that persists until the process ends
-        tmp = tempfile.NamedTemporaryFile(
-            mode="w",
-            suffix=".json",
-            prefix="mcp_config_",
-            delete=False,
-        )
-        json.dump(config, tmp, indent=2)
-        tmp.close()
-        return tmp.name
+        # Write to a temp file with restricted permissions (owner-only).
+        # Cleaned up by _run_claude's finally block after the subprocess exits.
+        content = json.dumps(config, indent=2)
+        fd, path = tempfile.mkstemp(suffix=".json", prefix="mcp_config_")
+        try:
+            os.fchmod(fd, 0o600)
+            os.write(fd, content.encode())
+        finally:
+            os.close(fd)
+        return path
 
 
 def _validate_server(server: McpServer):

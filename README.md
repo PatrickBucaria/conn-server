@@ -165,8 +165,7 @@ conn_server/
 ├── mcp_catalog.py       # MCP tool catalog
 ├── preview_manager.py   # Background dev server management
 ├── project_config.py    # Per-project settings
-├── git_utils.py         # Git utilities
-└── dashboard/           # Web dashboard static files
+└── git_utils.py         # Git utilities
 ```
 
 ## Testing
