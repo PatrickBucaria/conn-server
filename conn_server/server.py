@@ -934,6 +934,10 @@ async def _handle_message(websocket: WebSocket, msg: dict):
         "text": text or "[image]",
     })
 
+    # Generate AI title immediately from first message (don't wait for response)
+    if is_first_turn and conversation_id:
+        asyncio.create_task(_generate_summary(conversation_id, text or "[image]"))
+
     # Use worktree path if this conversation is isolated, otherwise working_dir
     conv_obj = sessions.get_conversation(conversation_id)
     if conv_obj and conv_obj.git_worktree_path:
@@ -1336,11 +1340,8 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
                 complete_msg["git_branch"] = branch
         await _send_to_client(complete_msg)
 
-        # Generate AI summary for new conversations (first turn only)
-        logger.info(f"Summary check: is_first_turn={is_first_turn}, new_session_id={new_session_id!r}")
-        if is_first_turn and new_session_id:
-            logger.info(f"Triggering summary generation for {conversation_id}")
-            asyncio.create_task(_generate_summary(conversation_id))
+        # Summary generation is now triggered earlier in _handle_message
+        # before _run_claude is called, so the title arrives while streaming.
 
     except Exception as e:
         logger.exception(f"claude subprocess error: {e}")
@@ -1359,28 +1360,18 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
             conversation_locks.pop(conversation_id, None)
 
 
-async def _generate_summary(conversation_id: str):
-    """Generate a short AI title for a new conversation, replacing the raw first-message name."""
+async def _generate_summary(conversation_id: str, user_text: str):
+    """Generate a short AI title from the user's first message."""
     try:
-        history = sessions.get_history(conversation_id)
-        if not history:
+        if not user_text or user_text == "[image]":
             return
-
-        user_msg = next((h["text"] for h in history if h["role"] == "user"), None)
-        assistant_msg = next((h["text"] for h in history if h["role"] == "assistant"), None)
-        if not user_msg:
-            return
-
-        context = f"User: {user_msg[:500]}"
-        if assistant_msg:
-            context += f"\nAssistant: {assistant_msg[:500]}"
 
         prompt = (
             "Generate a very short title (under 50 characters) for this conversation. "
             "Be specific and concise, like a commit message or task title. "
             "Examples: 'Fix WebSocket buffer overflow', 'Add dark mode toggle', 'Debug login crash'. "
             "Just output the title, nothing else.\n\n"
-            f"{context}"
+            f"User: {user_text[:500]}"
         )
 
         env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
