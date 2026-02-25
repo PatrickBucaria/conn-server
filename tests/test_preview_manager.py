@@ -126,7 +126,7 @@ class TestCanPreview:
 class TestPreviewManagerLifecycle:
     def test_get_preview_returns_none_when_empty(self):
         pm = PreviewManager()
-        assert pm.get_preview("nonexistent") is None
+        assert pm.get_preview("/nonexistent") is None
 
     def test_list_previews_empty(self):
         pm = PreviewManager()
@@ -135,22 +135,23 @@ class TestPreviewManagerLifecycle:
     @pytest.mark.asyncio
     async def test_stop_returns_false_when_no_preview(self):
         pm = PreviewManager()
-        assert await pm.stop("nonexistent") is False
+        assert await pm.stop("/nonexistent") is False
 
     @pytest.mark.asyncio
     async def test_start_and_stop_static_server(self, tmp_path):
         """Integration test: start a real http.server preview and stop it."""
         pm = PreviewManager()
         (tmp_path / "index.html").write_text("<html><body>test</body></html>")
+        wd = str(tmp_path)
 
         info = await pm.start(
+            working_dir=wd,
             conversation_id="test-conv",
-            working_dir=str(tmp_path),
         )
 
         assert PREVIEW_PORT_MIN <= info.port <= PREVIEW_PORT_MAX
         assert info.conversation_id == "test-conv"
-        assert pm.get_preview("test-conv") is not None
+        assert pm.get_preview(wd) is not None
         assert len(pm.list_previews()) == 1
 
         # Verify the server is actually responding
@@ -159,36 +160,60 @@ class TestPreviewManagerLifecycle:
         await writer.wait_closed()
 
         # Stop it
-        stopped = await pm.stop("test-conv")
+        stopped = await pm.stop(wd)
         assert stopped is True
-        assert pm.get_preview("test-conv") is None
+        assert pm.get_preview(wd) is None
         assert len(pm.list_previews()) == 0
 
     @pytest.mark.asyncio
-    async def test_start_replaces_existing(self, tmp_path):
-        """Starting a preview for the same conversation stops the old one."""
+    async def test_start_deduplicates_same_dir(self, tmp_path):
+        """Starting a preview for the same working_dir returns the existing one."""
         pm = PreviewManager()
         (tmp_path / "index.html").write_text("<html></html>")
+        wd = str(tmp_path)
 
-        info1 = await pm.start("test-conv", str(tmp_path))
-        port1 = info1.port
+        info1 = await pm.start(working_dir=wd, conversation_id="conv-1")
+        info2 = await pm.start(working_dir=wd, conversation_id="conv-2")
 
-        info2 = await pm.start("test-conv", str(tmp_path))
-        port2 = info2.port
-
-        # Should have replaced
+        # Should reuse the existing preview
+        assert info1.port == info2.port
         assert len(pm.list_previews()) == 1
-        assert pm.get_preview("test-conv").port == port2
 
         await pm.stop_all()
 
     @pytest.mark.asyncio
-    async def test_stop_all(self, tmp_path):
+    async def test_stop_for_conversation(self, tmp_path):
+        """stop_for_conversation finds and stops preview by conversation_id."""
         pm = PreviewManager()
         (tmp_path / "index.html").write_text("<html></html>")
+        wd = str(tmp_path)
 
-        await pm.start("conv-1", str(tmp_path))
-        await pm.start("conv-2", str(tmp_path))
+        await pm.start(working_dir=wd, conversation_id="test-conv")
+        assert len(pm.list_previews()) == 1
+
+        result = await pm.stop_for_conversation("test-conv")
+        assert result == wd
+        assert len(pm.list_previews()) == 0
+
+    @pytest.mark.asyncio
+    async def test_stop_for_conversation_returns_none_when_missing(self):
+        pm = PreviewManager()
+        result = await pm.stop_for_conversation("nonexistent")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_stop_all(self, tmp_path):
+        pm = PreviewManager()
+        # Create two separate project dirs
+        dir1 = tmp_path / "proj1"
+        dir2 = tmp_path / "proj2"
+        dir1.mkdir()
+        dir2.mkdir()
+        (dir1 / "index.html").write_text("<html></html>")
+        (dir2 / "index.html").write_text("<html></html>")
+
+        await pm.start(working_dir=str(dir1))
+        await pm.start(working_dir=str(dir2))
         assert len(pm.list_previews()) == 2
 
         await pm.stop_all()
@@ -199,15 +224,43 @@ class TestPreviewManagerLifecycle:
         """Starting with an explicit command uses it instead of auto-detection."""
         pm = PreviewManager()
         (tmp_path / "index.html").write_text("<html></html>")
+        wd = str(tmp_path)
 
         # Use a dynamic free port instead of hardcoding
         port = pm._find_free_port()
         info = await pm.start(
-            "test-conv",
-            str(tmp_path),
-            command=[sys.executable, "-m", "http.server", str(port), "--directory", str(tmp_path), "--bind", "0.0.0.0"],
+            working_dir=wd,
+            command=[sys.executable, "-m", "http.server", str(port), "--directory", wd, "--bind", "0.0.0.0"],
         )
         assert info is not None
+        await pm.stop_all()
+
+    @pytest.mark.asyncio
+    async def test_get_preview_for_conversation(self, tmp_path):
+        pm = PreviewManager()
+        (tmp_path / "index.html").write_text("<html></html>")
+        wd = str(tmp_path)
+
+        await pm.start(working_dir=wd, conversation_id="my-conv")
+        info = pm.get_preview_for_conversation("my-conv")
+        assert info is not None
+        assert info.working_dir == wd
+
+        assert pm.get_preview_for_conversation("other-conv") is None
+        await pm.stop_all()
+
+    @pytest.mark.asyncio
+    async def test_start_without_conversation_id(self, tmp_path):
+        """Project-scoped start (no conversation_id)."""
+        pm = PreviewManager()
+        (tmp_path / "index.html").write_text("<html></html>")
+        wd = str(tmp_path)
+
+        info = await pm.start(working_dir=wd)
+        assert info.conversation_id is None
+        assert info.working_dir == wd
+        assert len(pm.list_previews()) == 1
+
         await pm.stop_all()
 
 
@@ -345,3 +398,96 @@ class TestPreviewEndpoints:
             # Verify stopped
             status_response = await client.get("/preview/status", headers=headers)
             assert len(status_response.json()["previews"]) == 0
+
+
+class TestProjectPreviewEndpoints:
+    @pytest.mark.asyncio
+    async def test_check_project_requires_auth(self, test_client):
+        async with test_client as client:
+            response = await client.get("/preview/check-project", params={"path": "/tmp"})
+        assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_check_project_true(self, test_client, headers, tmp_path):
+        (tmp_path / "index.html").write_text("<html></html>")
+        async with test_client as client:
+            response = await client.get(
+                "/preview/check-project",
+                params={"path": str(tmp_path)},
+                headers=headers,
+            )
+        assert response.status_code == 200
+        assert response.json()["previewable"] is True
+
+    @pytest.mark.asyncio
+    async def test_check_project_false(self, test_client, headers, tmp_path):
+        async with test_client as client:
+            response = await client.get(
+                "/preview/check-project",
+                params={"path": str(tmp_path)},
+                headers=headers,
+            )
+        assert response.status_code == 200
+        assert response.json()["previewable"] is False
+
+    @pytest.mark.asyncio
+    async def test_start_project_requires_auth(self, test_client):
+        async with test_client as client:
+            response = await client.post(
+                "/preview/start-project",
+                json={"working_dir": "/tmp"},
+            )
+        assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_start_project(self, test_client, headers, tmp_config_dir):
+        project_dir = tmp_config_dir["projects_dir"] / "web-proj"
+        project_dir.mkdir()
+        (project_dir / "index.html").write_text("<html></html>")
+
+        async with test_client as client:
+            response = await client.post(
+                "/preview/start-project",
+                json={"working_dir": str(project_dir)},
+                headers=headers,
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert "port" in data
+            assert "working_dir" in data
+            assert PREVIEW_PORT_MIN <= data["port"] <= PREVIEW_PORT_MAX
+
+            # Check status shows it
+            status = await client.get("/preview/status", headers=headers)
+            assert len(status.json()["previews"]) == 1
+
+            # Stop via project endpoint
+            stop = await client.post(
+                "/preview/stop-project",
+                json={"working_dir": str(project_dir)},
+                headers=headers,
+            )
+            assert stop.status_code == 200
+
+            # Verify stopped
+            status = await client.get("/preview/status", headers=headers)
+            assert len(status.json()["previews"]) == 0
+
+    @pytest.mark.asyncio
+    async def test_stop_project_requires_auth(self, test_client):
+        async with test_client as client:
+            response = await client.post(
+                "/preview/stop-project",
+                json={"working_dir": "/tmp"},
+            )
+        assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_stop_project_404(self, test_client, headers):
+        async with test_client as client:
+            response = await client.post(
+                "/preview/stop-project",
+                json={"working_dir": "/nonexistent"},
+                headers=headers,
+            )
+        assert response.status_code == 404

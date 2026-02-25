@@ -99,8 +99,8 @@ async def delete_conversation(conversation_id: str, authorization: str = Header(
     if conv and conv.git_worktree_path and conv.original_working_dir:
         remove_worktree(conv.original_working_dir, conversation_id)
         logger.info(f"Cleaned up worktree for conversation {conversation_id}")
-    # Stop any preview server for this conversation
-    await previews.stop(conversation_id)
+    # Stop any preview server associated with this conversation
+    await previews.stop_for_conversation(conversation_id)
     if sessions.delete_conversation(conversation_id):
         # Clean up uploaded images for this conversation
         conv_uploads = UPLOADS_DIR / conversation_id
@@ -491,6 +491,14 @@ class PreviewStopRequest(BaseModel):
     conversation_id: str
 
 
+class PreviewStartProjectRequest(BaseModel):
+    working_dir: str
+
+
+class PreviewStopProjectRequest(BaseModel):
+    working_dir: str
+
+
 @app.get("/preview/check/{conversation_id}")
 async def check_preview(conversation_id: str, authorization: str = Header(None)):
     """Check if a conversation's project directory is previewable."""
@@ -500,6 +508,38 @@ async def check_preview(conversation_id: str, authorization: str = Header(None))
         raise HTTPException(status_code=404, detail="Conversation not found")
     working_dir = conv.working_dir or get_working_dir()
     return {"previewable": PreviewManager.can_preview(working_dir)}
+
+
+@app.get("/preview/check-project")
+async def check_preview_project(path: str = Query(...), authorization: str = Header(None)):
+    """Check if a project directory is previewable."""
+    _verify_rest_auth(authorization)
+    return {"previewable": PreviewManager.can_preview(path)}
+
+
+async def _broadcast_preview_available(working_dir: str, port: int, conversation_id: str | None = None):
+    """Broadcast preview_available to all connected WebSocket clients."""
+    event = {
+        "type": "preview_available",
+        "working_dir": working_dir,
+        "port": port,
+    }
+    if conversation_id:
+        event["conversation_id"] = conversation_id
+    for ws in connected_clients:
+        await _send(ws, event)
+
+
+async def _broadcast_preview_stopped(working_dir: str, conversation_id: str | None = None):
+    """Broadcast preview_stopped to all connected WebSocket clients."""
+    event = {
+        "type": "preview_stopped",
+        "working_dir": working_dir,
+    }
+    if conversation_id:
+        event["conversation_id"] = conversation_id
+    for ws in connected_clients:
+        await _send(ws, event)
 
 
 @app.post("/preview/start")
@@ -515,40 +555,51 @@ async def start_preview(request: PreviewStartRequest, authorization: str = Heade
 
     try:
         info = await previews.start(
-            conversation_id=request.conversation_id,
             working_dir=working_dir,
+            conversation_id=request.conversation_id,
         )
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    # Broadcast preview_available to all connected WebSocket clients
-    preview_event = {
-        "type": "preview_available",
-        "conversation_id": request.conversation_id,
-        "port": info.port,
-    }
-    for ws in connected_clients:
-        await _send(ws, preview_event)
-
+    await _broadcast_preview_available(working_dir, info.port, request.conversation_id)
     return {"port": info.port}
+
+
+@app.post("/preview/start-project")
+async def start_preview_project(request: PreviewStartProjectRequest, authorization: str = Header(None)):
+    """Start a dev server for a project directory (no conversation required)."""
+    _verify_rest_auth(authorization)
+
+    try:
+        info = await previews.start(working_dir=request.working_dir)
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    await _broadcast_preview_available(request.working_dir, info.port)
+    return {"port": info.port, "working_dir": request.working_dir}
 
 
 @app.post("/preview/stop")
 async def stop_preview(request: PreviewStopRequest, authorization: str = Header(None)):
     """Stop the preview server for a conversation."""
     _verify_rest_auth(authorization)
-    stopped = await previews.stop(request.conversation_id)
-    if not stopped:
+    working_dir = await previews.stop_for_conversation(request.conversation_id)
+    if not working_dir:
         raise HTTPException(status_code=404, detail="No preview running for this conversation")
 
-    # Broadcast preview_stopped to all connected WebSocket clients
-    stop_event = {
-        "type": "preview_stopped",
-        "conversation_id": request.conversation_id,
-    }
-    for ws in connected_clients:
-        await _send(ws, stop_event)
+    await _broadcast_preview_stopped(working_dir, request.conversation_id)
+    return {"stopped": True}
 
+
+@app.post("/preview/stop-project")
+async def stop_preview_project(request: PreviewStopProjectRequest, authorization: str = Header(None)):
+    """Stop the preview server for a project directory."""
+    _verify_rest_auth(authorization)
+    stopped = await previews.stop(request.working_dir)
+    if not stopped:
+        raise HTTPException(status_code=404, detail="No preview running for this directory")
+
+    await _broadcast_preview_stopped(request.working_dir)
     return {"stopped": True}
 
 

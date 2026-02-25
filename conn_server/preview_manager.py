@@ -20,13 +20,14 @@ PREVIEW_PORT_MAX = 8199
 class PreviewInfo:
     port: int
     pid: int
-    conversation_id: str
     working_dir: str
     command: str
+    conversation_id: str | None = None
 
 
 class PreviewManager:
     def __init__(self):
+        # Primary key: working_dir (one preview per project directory)
         self._previews: dict[str, PreviewInfo] = {}
         self._processes: dict[str, asyncio.subprocess.Process] = {}
 
@@ -61,17 +62,39 @@ class PreviewManager:
 
         return False
 
-    def _find_free_port(self) -> int:
-        """Find an available port in the preview range."""
-        for port in range(PREVIEW_PORT_MIN, PREVIEW_PORT_MAX + 1):
-            if any(p.port == port for p in self._previews.values()):
-                continue
-            try:
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.bind(("", port))
-                    return port
-            except OSError:
-                continue
+    def _find_free_port(self, working_dir: str | None = None) -> int:
+        """Find an available port in the preview range.
+
+        If working_dir is given, derives a stable preferred port from the path
+        hash so the same project always lands on the same port (avoids browser
+        cache crossover when different projects reuse ports).
+        """
+        port_range = PREVIEW_PORT_MAX - PREVIEW_PORT_MIN + 1
+        used = {p.port for p in self._previews.values()}
+
+        if working_dir:
+            preferred = PREVIEW_PORT_MIN + (hash(working_dir) % port_range)
+            # Try the preferred port first, then scan from there
+            for offset in range(port_range):
+                port = PREVIEW_PORT_MIN + (preferred - PREVIEW_PORT_MIN + offset) % port_range
+                if port in used:
+                    continue
+                try:
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                        s.bind(("", port))
+                        return port
+                except OSError:
+                    continue
+        else:
+            for port in range(PREVIEW_PORT_MIN, PREVIEW_PORT_MAX + 1):
+                if port in used:
+                    continue
+                try:
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                        s.bind(("", port))
+                        return port
+                except OSError:
+                    continue
         raise RuntimeError("No free ports available in preview range")
 
     def _detect_command(self, working_dir: str, port: int) -> list[str]:
@@ -132,21 +155,25 @@ class PreviewManager:
 
     async def start(
         self,
-        conversation_id: str,
         working_dir: str,
+        conversation_id: str | None = None,
         command: list[str] | None = None,
     ) -> PreviewInfo:
-        """Start a dev server for a conversation.
+        """Start a dev server for a project directory.
+
+        If a preview is already running for this working_dir, returns it.
 
         Args:
-            conversation_id: The conversation requesting the preview.
             working_dir: The project directory to serve.
+            conversation_id: Optional conversation that triggered the preview.
             command: Optional explicit command. Auto-detected if not given.
         """
-        # Stop any existing preview for this conversation
-        await self.stop(conversation_id)
+        # If already running for this directory, return existing
+        existing = self.get_preview(working_dir)
+        if existing:
+            return existing
 
-        port = self._find_free_port()
+        port = self._find_free_port(working_dir)
 
         if command is None:
             cmd = self._detect_command(working_dir, port)
@@ -154,7 +181,7 @@ class PreviewManager:
             cmd = command
 
         cmd_str = " ".join(cmd)
-        logger.info(f"Starting preview for {conversation_id}: {cmd_str} (port {port})")
+        logger.info(f"Starting preview for {working_dir}: {cmd_str} (port {port})")
 
         # Start in its own process group so it survives Claude process termination
         process = await asyncio.create_subprocess_exec(
@@ -168,36 +195,36 @@ class PreviewManager:
         info = PreviewInfo(
             port=port,
             pid=process.pid,
-            conversation_id=conversation_id,
             working_dir=working_dir,
             command=cmd_str,
+            conversation_id=conversation_id,
         )
-        self._previews[conversation_id] = info
-        self._processes[conversation_id] = process
+        self._previews[working_dir] = info
+        self._processes[working_dir] = process
 
         # Wait for the server to become ready
         ready = await self._wait_for_port(port)
         if not ready:
             # Check if the process died
             if process.returncode is not None:
-                self._previews.pop(conversation_id, None)
-                self._processes.pop(conversation_id, None)
+                self._previews.pop(working_dir, None)
+                self._processes.pop(working_dir, None)
                 raise RuntimeError(f"Preview server exited immediately (code {process.returncode})")
             logger.warning(f"Preview on port {port} not yet responding, but process is running")
 
         logger.info(f"Preview ready on port {port} (pid {process.pid})")
         return info
 
-    async def stop(self, conversation_id: str) -> bool:
-        """Stop the preview server for a conversation."""
-        process = self._processes.pop(conversation_id, None)
-        info = self._previews.pop(conversation_id, None)
+    async def stop(self, working_dir: str) -> bool:
+        """Stop the preview server for a project directory."""
+        process = self._processes.pop(working_dir, None)
+        self._previews.pop(working_dir, None)
 
         if process is None:
             return False
 
         if process.returncode is None:
-            logger.info(f"Stopping preview for {conversation_id} (pid {process.pid})")
+            logger.info(f"Stopping preview for {working_dir} (pid {process.pid})")
             try:
                 # Kill the entire process group
                 os.killpg(os.getpgid(process.pid), 9)
@@ -211,36 +238,51 @@ class PreviewManager:
 
         return True
 
+    async def stop_for_conversation(self, conversation_id: str) -> str | None:
+        """Stop the preview associated with a conversation. Returns working_dir if stopped."""
+        for wd, info in list(self._previews.items()):
+            if info.conversation_id == conversation_id:
+                await self.stop(wd)
+                return wd
+        return None
+
     async def stop_all(self):
         """Stop all preview servers."""
-        for cid in list(self._previews.keys()):
-            await self.stop(cid)
+        for wd in list(self._previews.keys()):
+            await self.stop(wd)
 
-    def get_preview(self, conversation_id: str) -> PreviewInfo | None:
-        """Get active preview info for a conversation."""
-        info = self._previews.get(conversation_id)
+    def get_preview(self, working_dir: str) -> PreviewInfo | None:
+        """Get active preview info for a project directory."""
+        info = self._previews.get(working_dir)
         if info is None:
             return None
         # Check if process is still alive
-        process = self._processes.get(conversation_id)
+        process = self._processes.get(working_dir)
         if process and process.returncode is not None:
             # Process died — clean up
-            self._previews.pop(conversation_id, None)
-            self._processes.pop(conversation_id, None)
+            self._previews.pop(working_dir, None)
+            self._processes.pop(working_dir, None)
             return None
         return info
+
+    def get_preview_for_conversation(self, conversation_id: str) -> PreviewInfo | None:
+        """Get active preview for the directory associated with a conversation."""
+        for wd, info in self._previews.items():
+            if info.conversation_id == conversation_id:
+                return self.get_preview(wd)
+        return None
 
     def list_previews(self) -> list[dict]:
         """List all active previews."""
         result = []
-        for cid in list(self._previews.keys()):
-            info = self.get_preview(cid)
+        for wd in list(self._previews.keys()):
+            info = self.get_preview(wd)
             if info:
                 result.append({
-                    "conversation_id": info.conversation_id,
                     "port": info.port,
                     "pid": info.pid,
                     "working_dir": info.working_dir,
                     "command": info.command,
+                    "conversation_id": info.conversation_id,
                 })
         return result
