@@ -1,5 +1,7 @@
 # Conn Server
 
+*"Mr. Spock, you have the Conn!"* 🖖
+
 A self-hosted server that lets you interact with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) from any device over your network. Run Claude on a home server, connect from your phone or any WebSocket client.
 
 ## Features
@@ -35,9 +37,9 @@ On first run, `conn-server start` will:
 5. Display a QR code for the mobile app
 
 **Prerequisites** (if you don't have them):
-- Python 3.10+ — download from [python.org](https://www.python.org/downloads/) or `brew install python`
-- pipx — `python3 -m pip install --user pipx && python3 -m pipx ensurepath` (restart terminal after)
-- Node.js — download from [nodejs.org](https://nodejs.org/) (needed for Claude CLI)
+- Python 3.10+ — `brew install python` or download from [python.org](https://www.python.org/downloads/)
+- pipx — `brew install pipx` (or `python3 -m pip install --user pipx && python3 -m pipx ensurepath`)
+- Node.js — `brew install node` or download from [nodejs.org](https://nodejs.org/) (needed for Claude CLI)
 - Claude CLI — `npm install -g @anthropic-ai/claude-code && claude` (to authenticate)
 
 ### CLI Commands
