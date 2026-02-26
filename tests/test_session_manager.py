@@ -106,6 +106,31 @@ class TestSessionManagerConversations:
         assert updated.last_message_at >= original_time
 
 
+    def test_create_conversation_idempotent(self, tmp_config_dir):
+        """Duplicate create_conversation should return existing, not overwrite."""
+        sm = SessionManager()
+        original = sm.create_conversation("conv_1", "Original", working_dir="/projects/foo")
+        sm.update_session_id("conv_1", "session_abc")
+
+        # Attempt to create again with different name/working_dir
+        result = sm.create_conversation("conv_1", "Overwritten", working_dir="/projects/bar")
+
+        # Should return the original, preserving session_id and working_dir
+        assert result.name == "Original"
+        assert result.working_dir == "/projects/foo"
+        assert result.claude_session_id == "session_abc"
+
+    def test_create_conversation_idempotent_preserves_worktree(self, tmp_config_dir):
+        """Duplicate create_conversation should not clear worktree assignment."""
+        sm = SessionManager()
+        sm.create_conversation("conv_1", "Test", working_dir="/projects/foo")
+        sm.update_worktree("conv_1", "/tmp/wt/conv_1", "/projects/foo")
+
+        result = sm.create_conversation("conv_1", "Overwritten")
+        assert result.git_worktree_path == "/tmp/wt/conv_1"
+        assert result.original_working_dir == "/projects/foo"
+
+
 class TestSessionManagerPermissions:
     """Test per-conversation allowed_tools."""
 

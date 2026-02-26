@@ -1014,7 +1014,7 @@ async def _handle_new_conversation(websocket: WebSocket, msg: dict):
     if working_dir and is_git_repo(working_dir):
         active_in_project = [
             cid for cid, proc in active_processes.items()
-            if proc.returncode is None and _working_dir_matches(cid, working_dir)
+            if cid != conversation_id and proc.returncode is None and _working_dir_matches(cid, working_dir)
         ]
         if active_in_project:
             logger.info(f"Active conversations in {working_dir}: {active_in_project} — creating worktree")
@@ -1394,10 +1394,44 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
                 os.unlink(mcp_config_path)
             except OSError:
                 pass
+        # Clean up worktrees if no longer needed (no other active processes in same project)
+        _maybe_cleanup_worktrees(conversation_id)
         # Clean up lock if no longer held
         lock = conversation_locks.get(conversation_id)
         if lock and not lock.locked():
             conversation_locks.pop(conversation_id, None)
+
+
+def _maybe_cleanup_worktrees(conversation_id: str):
+    """Remove worktrees for a project if no parallel processes remain.
+
+    When a process finishes, check the project directory and clean up ALL
+    worktrees for that project — not just the finishing conversation's own
+    worktree. This handles the case where ConvA (main dir) finishes after
+    ConvB (worktree) already finished, leaving ConvB's worktree stale.
+    """
+    conv = sessions.get_conversation(conversation_id)
+    if not conv:
+        return
+
+    # Determine the project directory (either original_working_dir or working_dir)
+    project_dir = conv.original_working_dir or conv.working_dir
+    if not project_dir:
+        return
+
+    # If any active process targets this project, worktrees are still needed
+    still_active = any(
+        proc.returncode is None and _working_dir_matches(cid, project_dir)
+        for cid, proc in active_processes.items()
+    )
+    if still_active:
+        return
+
+    # Clean up ALL worktrees for this project
+    for c in sessions.get_worktrees_for_project(project_dir):
+        logger.info(f"No more parallel processes for {project_dir} — removing worktree for {c.id}")
+        remove_worktree(project_dir, c.id)
+        sessions.update_worktree(c.id, None, None)
 
 
 async def _generate_summary(conversation_id: str, user_text: str):

@@ -61,6 +61,12 @@ class SessionManager:
 
     def create_conversation(self, conversation_id: str, name: str, working_dir: str | None = None, allowed_tools: list[str] | None = None, mcp_servers: list[str] | None = None, model: str | None = None, agent: str | None = None) -> Conversation:
         _validate_conversation_id(conversation_id)
+        # Idempotent: if conversation already exists, return it without overwriting.
+        # This prevents duplicate new_conversation messages (e.g. from client race
+        # conditions) from destroying session state (claude_session_id, worktree).
+        existing = self._conversations.get(conversation_id)
+        if existing:
+            return existing
         now = _iso_now()
         conv = Conversation(
             id=conversation_id,
@@ -111,6 +117,13 @@ class SessionManager:
             self._save()
             return True
         return False
+
+    def get_worktrees_for_project(self, project_dir: str) -> list[Conversation]:
+        """Return all conversations with worktrees targeting the given project directory."""
+        return [
+            c for c in self._conversations.values()
+            if c.git_worktree_path and c.original_working_dir == project_dir
+        ]
 
     def rename_conversation(self, conversation_id: str, new_name: str):
         conv = self._conversations.get(conversation_id)
