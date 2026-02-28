@@ -121,11 +121,20 @@ async def get_conversation_history(conversation_id: str, authorization: str = He
 
 
 ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif"}
+ALLOWED_DOCUMENT_EXTENSIONS = {
+    ".pdf", ".txt", ".md", ".csv", ".json", ".xml", ".html", ".htm",
+    ".py", ".js", ".ts", ".kt", ".java", ".swift", ".c", ".cpp", ".h",
+    ".yaml", ".yml", ".toml", ".log", ".sh", ".bash", ".zsh",
+    ".sql", ".r", ".go", ".rs", ".rb", ".php", ".css", ".scss",
+    ".ini", ".cfg", ".conf", ".properties",
+    ".doc", ".docx", ".xls", ".xlsx", ".pptx", ".rtf",
+}
+ALLOWED_UPLOAD_EXTENSIONS = ALLOWED_IMAGE_EXTENSIONS | ALLOWED_DOCUMENT_EXTENSIONS
 MAX_UPLOAD_SIZE = 20 * 1024 * 1024  # 20MB
 
 
 @app.post("/upload")
-async def upload_image(
+async def upload_file(
     conversation_id: str = Query(...),
     file: UploadFile = File(...),
     authorization: str = Header(None),
@@ -133,7 +142,7 @@ async def upload_image(
     _verify_rest_auth(authorization)
 
     ext = Path(file.filename or "").suffix.lower()
-    if ext not in ALLOWED_IMAGE_EXTENSIONS:
+    if ext not in ALLOWED_UPLOAD_EXTENSIONS:
         raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
 
     content = await file.read()
@@ -922,21 +931,29 @@ async def ws_chat(websocket: WebSocket):
 
 
 def _build_prompt(text: str, image_paths: list[str]) -> str:
-    """Build the prompt text, prepending image references if present."""
+    """Build the prompt text, prepending file references if present."""
     if not image_paths:
         return text
 
-    image_lines = []
+    file_lines = []
     for path in image_paths:
-        image_lines.append(f"[The user attached an image. View it by reading this file: {path}]")
-    image_block = "\n".join(image_lines)
+        ext = Path(path).suffix.lower()
+        if ext in ALLOWED_IMAGE_EXTENSIONS:
+            if text:
+                file_lines.append(f"[The user attached an image. View it by reading this file: {path}]")
+            else:
+                file_lines.append(f"[The user sent you an image. View and describe it by reading this file: {path}]")
+        else:
+            filename = Path(path).name
+            # Strip the UUID prefix (12 hex chars + underscore) to show the original filename
+            if len(filename) > 13 and filename[12] == '_':
+                filename = filename[13:]
+            file_lines.append(f"[The user attached a file ({filename}). Read it: {path}]")
+    file_block = "\n".join(file_lines)
 
     if text:
-        return f"{image_block}\n\n{text}"
-    return image_block.replace(
-        "attached an image. View it by reading",
-        "sent you an image. View and describe it by reading",
-    )
+        return f"{file_block}\n\n{text}"
+    return file_block
 
 
 async def _handle_message(websocket: WebSocket, msg: dict):

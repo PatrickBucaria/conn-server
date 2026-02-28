@@ -263,9 +263,33 @@ class TestUploadEndpoint:
             response = await client.post(
                 "/upload?conversation_id=conv_1",
                 headers=headers,
-                files={"file": ("test.txt", b"hello", "text/plain")},
+                files={"file": ("test.exe", b"hello", "application/octet-stream")},
             )
         assert response.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_upload_accepts_txt(self, test_client, headers, tmp_config_dir):
+        async with test_client as client:
+            response = await client.post(
+                "/upload?conversation_id=conv_1",
+                headers=headers,
+                files={"file": ("notes.txt", b"hello world", "text/plain")},
+            )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["path"].endswith(".txt")
+
+    @pytest.mark.asyncio
+    async def test_upload_accepts_pdf(self, test_client, headers, tmp_config_dir):
+        async with test_client as client:
+            response = await client.post(
+                "/upload?conversation_id=conv_1",
+                headers=headers,
+                files={"file": ("doc.pdf", b"%PDF-1.4", "application/pdf")},
+            )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["path"].endswith(".pdf")
 
     @pytest.mark.asyncio
     async def test_upload_accepts_jpg(self, test_client, headers, tmp_config_dir):

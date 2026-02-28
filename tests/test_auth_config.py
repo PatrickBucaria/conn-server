@@ -129,7 +129,7 @@ class TestStartupBanner:
 
 
 class TestBuildPrompt:
-    """Test the _build_prompt helper for image handling."""
+    """Test the _build_prompt helper for image and document handling."""
 
     def test_no_images(self):
         from conn_server.server import _build_prompt
@@ -154,3 +154,22 @@ class TestBuildPrompt:
         assert "/tmp/a.jpg" in result
         assert "/tmp/b.jpg" in result
         assert "look" in result
+
+    def test_with_document(self):
+        from conn_server.server import _build_prompt
+        result = _build_prompt("check this", ["/tmp/uploads/abc123456789_report.pdf"])
+        assert "[The user attached a file (report.pdf)" in result
+        assert "Read it:" in result
+        assert "check this" in result
+
+    def test_document_only(self):
+        from conn_server.server import _build_prompt
+        result = _build_prompt("", ["/tmp/uploads/abc123456789_notes.txt"])
+        assert "[The user attached a file (notes.txt)" in result
+
+    def test_mixed_images_and_documents(self):
+        from conn_server.server import _build_prompt
+        result = _build_prompt("review", ["/tmp/img.jpg", "/tmp/uploads/abc123456789_doc.pdf"])
+        assert "attached an image" in result
+        assert "attached a file (doc.pdf)" in result
+        assert "review" in result
