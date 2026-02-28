@@ -238,6 +238,15 @@ class PreviewManager:
 
         return True
 
+    async def restart(
+        self,
+        working_dir: str,
+        conversation_id: str | None = None,
+    ) -> PreviewInfo:
+        """Stop and restart the preview server for a project directory."""
+        await self.stop(working_dir)
+        return await self.start(working_dir, conversation_id)
+
     async def stop_for_conversation(self, conversation_id: str) -> str | None:
         """Stop the preview associated with a conversation. Returns working_dir if stopped."""
         for wd, info in list(self._previews.items()):

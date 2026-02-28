@@ -250,6 +250,23 @@ class TestPreviewManagerLifecycle:
         await pm.stop_all()
 
     @pytest.mark.asyncio
+    async def test_restart_stops_and_starts_new_server(self, tmp_path):
+        """restart() stops the existing server and starts a fresh one."""
+        pm = PreviewManager()
+        (tmp_path / "index.html").write_text("<html></html>")
+        wd = str(tmp_path)
+
+        info1 = await pm.start(working_dir=wd, conversation_id="conv-1")
+        old_pid = info1.pid
+
+        info2 = await pm.restart(working_dir=wd, conversation_id="conv-1")
+        assert info2.pid != old_pid
+        assert info2.working_dir == wd
+        assert len(pm.list_previews()) == 1
+
+        await pm.stop_all()
+
+    @pytest.mark.asyncio
     async def test_start_without_conversation_id(self, tmp_path):
         """Project-scoped start (no conversation_id)."""
         pm = PreviewManager()
@@ -398,6 +415,65 @@ class TestPreviewEndpoints:
             # Verify stopped
             status_response = await client.get("/preview/status", headers=headers)
             assert len(status_response.json()["previews"]) == 0
+
+
+class TestRestartPreviewEndpoints:
+    @pytest.mark.asyncio
+    async def test_restart_preview_requires_auth(self, test_client):
+        async with test_client as client:
+            response = await client.post("/preview/restart", json={"conversation_id": "test"})
+        assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_restart_preview_404_no_conversation(self, test_client, headers):
+        async with test_client as client:
+            response = await client.post(
+                "/preview/restart",
+                json={"conversation_id": "nonexistent"},
+                headers=headers,
+            )
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_restart_preview_with_running_server(self, test_client, headers, tmp_config_dir):
+        """Start a preview, then restart it — should get a new port or same port with fresh server."""
+        project_dir = tmp_config_dir["projects_dir"] / "restart-app"
+        project_dir.mkdir()
+        (project_dir / "index.html").write_text("<html><body>Hello</body></html>")
+
+        async with test_client as client:
+            from conn_server.server import sessions
+            sessions.create_conversation("restart-conv", "Test", working_dir=str(project_dir))
+
+            # Start preview first
+            start_response = await client.post(
+                "/preview/start",
+                json={"conversation_id": "restart-conv"},
+                headers=headers,
+            )
+            assert start_response.status_code == 200
+
+            # Restart it
+            restart_response = await client.post(
+                "/preview/restart",
+                json={"conversation_id": "restart-conv"},
+                headers=headers,
+            )
+            assert restart_response.status_code == 200
+            data = restart_response.json()
+            assert "port" in data
+            assert PREVIEW_PORT_MIN <= data["port"] <= PREVIEW_PORT_MAX
+
+            # Verify still running
+            status_response = await client.get("/preview/status", headers=headers)
+            assert len(status_response.json()["previews"]) == 1
+
+            # Clean up
+            await client.post(
+                "/preview/stop",
+                json={"conversation_id": "restart-conv"},
+                headers=headers,
+            )
 
 
 class TestProjectPreviewEndpoints:

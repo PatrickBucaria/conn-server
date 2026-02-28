@@ -579,6 +579,29 @@ async def start_preview_project(request: PreviewStartProjectRequest, authorizati
     return {"port": info.port, "working_dir": request.working_dir}
 
 
+@app.post("/preview/restart")
+async def restart_preview(request: PreviewStartRequest, authorization: str = Header(None)):
+    """Restart the preview server for a conversation's project directory."""
+    _verify_rest_auth(authorization)
+
+    conv = sessions.get_conversation(request.conversation_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    working_dir = conv.working_dir or get_working_dir()
+
+    try:
+        info = await previews.restart(
+            working_dir=working_dir,
+            conversation_id=request.conversation_id,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    await _broadcast_preview_available(working_dir, info.port, request.conversation_id)
+    return {"port": info.port}
+
+
 @app.post("/preview/stop")
 async def stop_preview(request: PreviewStopRequest, authorization: str = Header(None)):
     """Stop the preview server for a conversation."""
@@ -1441,11 +1464,16 @@ async def _generate_summary(conversation_id: str, user_text: str):
             return
 
         prompt = (
-            "Generate a very short title (under 50 characters) for this conversation. "
-            "Be specific and concise, like a commit message or task title. "
-            "Examples: 'Fix WebSocket buffer overflow', 'Add dark mode toggle', 'Debug login crash'. "
-            "Just output the title, nothing else.\n\n"
-            f"User: {user_text[:500]}"
+            "Your ONLY job is to output a short title for the message below. "
+            "Rules:\n"
+            "- Output ONLY the title text, nothing else\n"
+            "- Maximum 50 characters\n"
+            "- Single line, no newlines\n"
+            "- No markdown, no quotes, no explanations\n"
+            "- Do NOT answer or respond to the message\n"
+            "- Be specific like a commit message: "
+            "'Fix WebSocket buffer overflow', 'Add dark mode toggle', 'Explain Claude hooks'\n\n"
+            f"Message: {user_text[:500]}"
         )
 
         env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
@@ -1459,9 +1487,19 @@ async def _generate_summary(conversation_id: str, user_text: str):
             cwd="/tmp",
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30.0)
-        summary = stdout.decode().strip()
+        raw_output = stdout.decode().strip()
 
-        logger.info(f"Summary raw output for {conversation_id}: {summary!r}")
+        logger.info(f"Summary raw output for {conversation_id}: {raw_output!r}")
+
+        # Claude sometimes returns a full multi-line response instead of just
+        # a title.  Extract only the first non-empty line and strip markdown
+        # heading markers so we still get a usable title.
+        summary = ""
+        for line in raw_output.splitlines():
+            line = line.strip().lstrip("#").strip().strip("*").strip()
+            if line:
+                summary = line
+                break
 
         if summary and len(summary) < 80 and not summary.lower().startswith("error"):
             sessions.rename_conversation(conversation_id, summary)
@@ -1472,8 +1510,8 @@ async def _generate_summary(conversation_id: str, user_text: str):
                 "conversation_id": conversation_id,
                 "name": summary,
             })
-        elif summary:
-            logger.warning(f"Summary rejected for {conversation_id}: {summary!r}")
+        elif raw_output:
+            logger.warning(f"Summary rejected for {conversation_id}: {raw_output[:200]!r}")
     except asyncio.TimeoutError:
         logger.warning(f"Summary generation timed out for {conversation_id}")
     except Exception as e:

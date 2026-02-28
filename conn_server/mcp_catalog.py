@@ -79,13 +79,13 @@ CATALOG: list[CatalogEntry] = [
     CatalogEntry(
         id="auto-mobile",
         display_name="AutoMobile",
-        description="Android device automation — tap, type, scroll, observe screens, manage emulators",
+        description="Android & iOS device automation — tap, type, scroll, observe screens, manage emulators & simulators",
         transport="stdio",
         command="npx",
-        args=["-y", "auto-mobile@latest"],
+        args=["-y", "@kaeawc/auto-mobile@latest"],
         default_env={"ANDROID_HOME": str(Path.home() / "Library/Android/sdk")},
         setup_note="Requires an Android emulator or device with USB debugging enabled on the server.",
-        doc_url="https://github.com/zillow/auto-mobile",
+        doc_url="https://github.com/kaeawc/auto-mobile",
     ),
     # -- Setup note (confirm before install) --
     CatalogEntry(
