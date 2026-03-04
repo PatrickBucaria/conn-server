@@ -997,8 +997,9 @@ async def _handle_message(websocket: WebSocket, msg: dict):
             conv_working_dir = conv.working_dir
             is_first_turn = not session_id  # First turn if no stored session yet
         else:
-            # Auto-create conversation if it doesn't exist
-            sessions.create_conversation(conversation_id, text[:50])
+            # Auto-create conversation if it doesn't exist (e.g. new_conversation was lost due to reconnect)
+            msg_working_dir = msg.get("working_dir")
+            sessions.create_conversation(conversation_id, text[:50], working_dir=msg_working_dir)
             is_first_turn = True
     elif session_id:
         # Client provided a session_id — check if the conversation actually has one stored
