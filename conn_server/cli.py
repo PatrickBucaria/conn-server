@@ -32,7 +32,7 @@ from .config import (
     CONFIG_DIR, CONFIG_FILE, LOG_DIR,
     load_config, get_host, get_port, get_working_dir,
     DEFAULT_HOST, DEFAULT_PORT, WORKING_DIR,
-    _write_private_file, _get_local_ip,
+    _write_private_file, _get_local_ip, _get_tailscale_ip,
 )
 from .tls import ensure_certs, get_cert_fingerprint, get_cert_der_b64, TLS_DIR
 
@@ -229,13 +229,18 @@ def _print_connection_info(show_qr: bool = False):
     token = config["auth_token"]
     working_dir = get_working_dir()
     local_ip = _get_local_ip()
+    tailscale_ip = _get_tailscale_ip()
+    qr_ip = tailscale_ip or local_ip
     fingerprint = get_cert_fingerprint()
 
     print()
     print(f"  {BOLD}Conn Server v{__version__}{NC}")
     print(f"  {'─' * 50}")
     print()
-    print(f"  {DIM}URL:{NC}        https://{local_ip}:{port}")
+    print(f"  {DIM}URL:{NC}        https://{qr_ip}:{port}")
+    print(f"  {DIM}LAN:{NC}        https://{local_ip}:{port}")
+    if tailscale_ip:
+        print(f"  {DIM}Tailscale:{NC} https://{tailscale_ip}:{port}")
     print(f"  {DIM}Auth token:{NC} {token[:8]}...{token[-8:]}")
     print(f"  {DIM}TLS:{NC}        {fingerprint}")
     print(f"  {DIM}Projects:{NC}   {working_dir}")
@@ -256,7 +261,7 @@ def _print_connection_info(show_qr: bool = False):
 
         cert_der_b64 = get_cert_der_b64()
         payload = json.dumps(
-            {"host": local_ip, "port": port, "token": token, "cert": cert_der_b64},
+            {"host": qr_ip, "port": port, "token": token, "cert": cert_der_b64},
             separators=(",", ":"),
         )
 
@@ -461,7 +466,7 @@ def cmd_start(args):
         # Service already running — just inform and exit
         if _health_check():
             _success("Server is already running")
-            _print_connection_info()
+            _print_connection_info(show_qr=True)
         else:
             _warn("Service is loaded but not responding — check: conn-server logs")
         return
@@ -477,7 +482,7 @@ def cmd_start(args):
         time.sleep(2)
         if _health_check():
             _success("Server started")
-            _print_connection_info()
+            _print_connection_info(show_qr=True)
         else:
             _warn("Server started but not responding yet — check: conn-server logs")
         return
@@ -595,11 +600,14 @@ def cmd_status(args):
         _fail("Server is not running")
 
     local_ip = _get_local_ip()
+    tailscale_ip = _get_tailscale_ip()
     print()
     print(f"  {DIM}URL:{NC}        https://localhost:{port}")
     print(f"  {DIM}Host:{NC}       {host}")
     print(f"  {DIM}Projects:{NC}   {working_dir}")
     print(f"  {DIM}LAN:{NC}        https://{local_ip}:{port}")
+    if tailscale_ip:
+        print(f"  {DIM}Tailscale:{NC} https://{tailscale_ip}:{port}")
 
     log_file = LOG_DIR / "server.log"
     if log_file.exists():
@@ -628,12 +636,15 @@ def cmd_qr(args):
     ensure_certs()
     cert_der_b64 = get_cert_der_b64()
     local_ip = _get_local_ip()
+    tailscale_ip = _get_tailscale_ip()
+    qr_ip = tailscale_ip or local_ip
 
     payload = json.dumps(
-        {"host": local_ip, "port": port, "token": token, "cert": cert_der_b64},
+        {"host": qr_ip, "port": port, "token": token, "cert": cert_der_b64},
         separators=(",", ":"),
     )
 
+    # Terminal QR
     qr = qrcode.QRCode(box_size=1, border=2)
     qr.add_data(payload)
     qr.make(fit=True)
@@ -644,7 +655,36 @@ def cmd_qr(args):
     for line in buf.getvalue().splitlines():
         print(f"  {line}")
     print()
+    if tailscale_ip:
+        print(f"  Using Tailscale IP: {tailscale_ip}")
+    else:
+        print(f"  Using LAN IP: {local_ip}")
     print("  Scan this QR code with the Conn app to connect.")
+
+    # SVG file
+    try:
+        from qrcode.image.svg import SvgPathImage
+
+        svg_path = CONFIG_DIR / "qr-code.svg"
+        qr_svg = qrcode.QRCode(box_size=10, border=4)
+        qr_svg.add_data(payload)
+        qr_svg.make(fit=True)
+        img = qr_svg.make_image(image_factory=SvgPathImage)
+        img.save(str(svg_path))
+
+        print(f"  {svg_path}")
+        print()
+
+        if _prompt_yn("Open QR code image?"):
+            if _is_macos():
+                subprocess.run(["open", str(svg_path)], capture_output=True)
+            elif shutil.which("xdg-open"):
+                subprocess.run(["xdg-open", str(svg_path)], capture_output=True)
+            else:
+                _info(f"Open {svg_path} in a browser to scan")
+    except ImportError:
+        pass
+
     print()
 
 

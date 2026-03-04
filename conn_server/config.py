@@ -47,6 +47,34 @@ def _write_private_file(path: Path, content: str):
         os.close(fd)
 
 
+def _get_tailscale_ip() -> str | None:
+    """Get the machine's Tailscale IPv4 address, or None if unavailable."""
+    import shutil
+    import subprocess
+
+    # Find the tailscale CLI — may be on PATH or inside the macOS app bundle
+    ts_bin = shutil.which("tailscale")
+    if not ts_bin:
+        mac_path = "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+        if os.path.isfile(mac_path):
+            ts_bin = mac_path
+    if not ts_bin:
+        return None
+
+    try:
+        result = subprocess.run(
+            [ts_bin, "ip", "-4"],
+            capture_output=True, text=True, timeout=3,
+        )
+        if result.returncode == 0:
+            ip = result.stdout.strip()
+            if ip:
+                return ip
+    except subprocess.TimeoutExpired:
+        pass
+    return None
+
+
 def _get_local_ip() -> str:
     """Get the machine's local network IP address."""
     try:
@@ -139,25 +167,29 @@ def print_startup_banner():
     token = config["auth_token"]
     working_dir = get_working_dir()
     local_ip = _get_local_ip()
+    tailscale_ip = _get_tailscale_ip()
+    # Prefer Tailscale IP for QR code — works both on LAN and remotely
+    qr_ip = tailscale_ip or local_ip
 
     # Ensure TLS certs exist
     ensure_certs()
     fingerprint = get_cert_fingerprint()
     cert_der_b64 = get_cert_der_b64()
 
-    url = f"https://{local_ip}:{port}"
-
     print()
     print("=" * 50)
     print("  Conn Server")
     print()
-    print(f"  URL:        {url}")
+    print(f"  URL:        https://{qr_ip}:{port}")
+    print(f"  LAN:        https://{local_ip}:{port}")
+    if tailscale_ip:
+        print(f"  Tailscale:  https://{tailscale_ip}:{port}")
     print(f"  Auth token: {token}")
     print(f"  TLS:        {fingerprint}")
     print(f"  Projects:   {working_dir}")
     print("=" * 50)
 
-    _print_qr_code(local_ip, port, token, cert_der_b64)
+    _print_qr_code(qr_ip, port, token, cert_der_b64)
 
     if is_first_run:
         print()

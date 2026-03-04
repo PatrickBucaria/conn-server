@@ -26,7 +26,10 @@ KEY_FILE = TLS_DIR / "server.key"
 
 
 def _get_local_ips() -> list[str]:
-    """Get all local network IP addresses for SAN entries."""
+    """Get all local network IP addresses for SAN entries.
+
+    Includes LAN IPs, loopback, and Tailscale IP if available.
+    """
     ips = {"127.0.0.1", "::1"}
     try:
         # Primary local IP
@@ -45,6 +48,11 @@ def _get_local_ips() -> list[str]:
                 ips.add(addr)
     except Exception:
         pass
+    # Include Tailscale IP so the cert is valid for remote connections
+    from .config import _get_tailscale_ip
+    ts_ip = _get_tailscale_ip()
+    if ts_ip:
+        ips.add(ts_ip)
     return sorted(ips)
 
 
