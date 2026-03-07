@@ -319,6 +319,65 @@ async def create_project(request: CreateProjectRequest, authorization: str = Hea
     return {"name": name, "path": str(new_project)}
 
 
+@app.get("/projects/files")
+async def list_project_files(path: str = Query(...), authorization: str = Header(None)):
+    """List files and directories in the given project path."""
+    _verify_rest_auth(authorization)
+    projects_root = Path(get_working_dir()).resolve()
+    target = Path(path).resolve()
+
+    # Security: ensure the target is under (or equal to) the projects root
+    try:
+        target.relative_to(projects_root)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not target.is_dir():
+        raise HTTPException(status_code=404, detail="Directory not found")
+
+    entries = []
+    for entry in sorted(target.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower())):
+        if entry.name.startswith("."):
+            continue
+        info = {
+            "name": entry.name,
+            "path": str(entry),
+            "is_dir": entry.is_dir(),
+        }
+        if not entry.is_dir():
+            try:
+                info["size"] = entry.stat().st_size
+            except OSError:
+                info["size"] = None
+        entries.append(info)
+    return {"entries": entries}
+
+
+@app.get("/projects/files/download")
+async def download_project_file(path: str = Query(...), token: str = Query(None), authorization: str = Header(None)):
+    """Download a file from a project directory.
+
+    Accepts auth via Authorization header OR ?token= query parameter
+    (for Android DownloadManager which can't set headers).
+    """
+    if token:
+        if not verify_token(token):
+            raise HTTPException(status_code=403, detail="Invalid token")
+    else:
+        _verify_rest_auth(authorization)
+
+    projects_root = Path(get_working_dir()).resolve()
+    target = Path(path).resolve()
+
+    try:
+        target.relative_to(projects_root)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    return FileResponse(str(target), filename=target.name)
+
+
 @app.get("/projects/config")
 async def get_project_config_endpoint(path: str = Query(...), authorization: str = Header(None)):
     """Get configuration (custom instructions) for a project."""

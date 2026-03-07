@@ -256,6 +256,167 @@ class TestProjectsEndpoint:
         assert plain["git_branch"] is None
 
 
+class TestProjectFilesEndpoint:
+    @pytest.mark.asyncio
+    async def test_list_files_returns_entries(self, test_client, headers, tmp_config_dir):
+        project_dir = tmp_config_dir["projects_dir"] / "MyProject"
+        project_dir.mkdir()
+        (project_dir / "src").mkdir()
+        (project_dir / "README.md").write_text("hello")
+
+        async with test_client as client:
+            response = await client.get(
+                "/projects/files",
+                params={"path": str(project_dir)},
+                headers=headers,
+            )
+        assert response.status_code == 200
+        entries = response.json()["entries"]
+        names = [e["name"] for e in entries]
+        assert "src" in names
+        assert "README.md" in names
+        # Directories come first
+        src_entry = next(e for e in entries if e["name"] == "src")
+        assert src_entry["is_dir"] is True
+        readme_entry = next(e for e in entries if e["name"] == "README.md")
+        assert readme_entry["is_dir"] is False
+        assert readme_entry["size"] == 5
+
+    @pytest.mark.asyncio
+    async def test_list_files_excludes_hidden(self, test_client, headers, tmp_config_dir):
+        project_dir = tmp_config_dir["projects_dir"] / "HiddenTest"
+        project_dir.mkdir()
+        (project_dir / ".git").mkdir()
+        (project_dir / "visible.txt").write_text("ok")
+
+        async with test_client as client:
+            response = await client.get(
+                "/projects/files",
+                params={"path": str(project_dir)},
+                headers=headers,
+            )
+        entries = response.json()["entries"]
+        names = [e["name"] for e in entries]
+        assert ".git" not in names
+        assert "visible.txt" in names
+
+    @pytest.mark.asyncio
+    async def test_list_files_rejects_path_outside_root(self, test_client, headers, tmp_config_dir):
+        async with test_client as client:
+            response = await client.get(
+                "/projects/files",
+                params={"path": "/etc"},
+                headers=headers,
+            )
+        assert response.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_list_files_404_nonexistent(self, test_client, headers, tmp_config_dir):
+        async with test_client as client:
+            response = await client.get(
+                "/projects/files",
+                params={"path": str(tmp_config_dir["projects_dir"] / "nonexistent")},
+                headers=headers,
+            )
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_list_files_requires_auth(self, test_client, tmp_config_dir):
+        async with test_client as client:
+            response = await client.get(
+                "/projects/files",
+                params={"path": str(tmp_config_dir["projects_dir"])},
+            )
+        assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_list_files_dirs_sorted_first(self, test_client, headers, tmp_config_dir):
+        project_dir = tmp_config_dir["projects_dir"] / "SortTest"
+        project_dir.mkdir()
+        (project_dir / "zebra.txt").write_text("z")
+        (project_dir / "alpha").mkdir()
+
+        async with test_client as client:
+            response = await client.get(
+                "/projects/files",
+                params={"path": str(project_dir)},
+                headers=headers,
+            )
+        entries = response.json()["entries"]
+        # Directory should come before file
+        assert entries[0]["name"] == "alpha"
+        assert entries[0]["is_dir"] is True
+        assert entries[1]["name"] == "zebra.txt"
+
+
+class TestProjectFileDownloadEndpoint:
+    @pytest.mark.asyncio
+    async def test_download_file(self, test_client, headers, tmp_config_dir):
+        project_dir = tmp_config_dir["projects_dir"] / "DlProject"
+        project_dir.mkdir()
+        (project_dir / "hello.txt").write_text("hello world")
+
+        async with test_client as client:
+            response = await client.get(
+                "/projects/files/download",
+                params={"path": str(project_dir / "hello.txt")},
+                headers=headers,
+            )
+        assert response.status_code == 200
+        assert response.text == "hello world"
+        assert "hello.txt" in response.headers.get("content-disposition", "")
+
+    @pytest.mark.asyncio
+    async def test_download_rejects_directory(self, test_client, headers, tmp_config_dir):
+        project_dir = tmp_config_dir["projects_dir"] / "DlDir"
+        project_dir.mkdir()
+
+        async with test_client as client:
+            response = await client.get(
+                "/projects/files/download",
+                params={"path": str(project_dir)},
+                headers=headers,
+            )
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_download_rejects_path_outside_root(self, test_client, headers):
+        async with test_client as client:
+            response = await client.get(
+                "/projects/files/download",
+                params={"path": "/etc/passwd"},
+                headers=headers,
+            )
+        assert response.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_download_with_token_query_param(self, test_client, tmp_config_dir):
+        project_dir = tmp_config_dir["projects_dir"] / "TokenDl"
+        project_dir.mkdir()
+        (project_dir / "data.txt").write_text("secret data")
+
+        async with test_client as client:
+            response = await client.get(
+                "/projects/files/download",
+                params={"path": str(project_dir / "data.txt"), "token": tmp_config_dir["token"]},
+            )
+        assert response.status_code == 200
+        assert response.text == "secret data"
+
+    @pytest.mark.asyncio
+    async def test_download_requires_auth(self, test_client, tmp_config_dir):
+        project_dir = tmp_config_dir["projects_dir"] / "NoAuth"
+        project_dir.mkdir()
+        (project_dir / "file.txt").write_text("nope")
+
+        async with test_client as client:
+            response = await client.get(
+                "/projects/files/download",
+                params={"path": str(project_dir / "file.txt")},
+            )
+        assert response.status_code == 401
+
+
 class TestUploadEndpoint:
     @pytest.mark.asyncio
     async def test_upload_rejects_unsupported_extension(self, test_client, headers):
