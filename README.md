@@ -10,9 +10,14 @@ A self-hosted server that lets you interact with [Claude Code](https://docs.anth
 - **Multiple concurrent conversations** — each with its own Claude process and working directory
 - **Session resume** — conversations persist across reconnects
 - **Project context** — point each conversation at a different project directory
+- **File attachments** — upload images and documents (PDF, code files, office docs, etc.)
+- **File browser** — browse and download project files from the app
 - **MCP integration** — configure Model Context Protocol servers for extended tool access
+- **Agent support** — create named agents with custom prompts, tools, and models
+- **Effort levels** — control Claude's thinking depth (low/medium/high) per conversation
 - **Web preview** — auto-detect and serve dev servers for web projects
 - **Built-in TLS** — auto-generated EC P-256 self-signed certificate with cert pinning (no CA needed)
+- **Tailscale support** — auto-detects Tailscale IP for remote access outside the home network
 - **Self-hosted updates** — optionally serve app releases from the server
 
 ## Requirements
@@ -97,8 +102,17 @@ All endpoints require `Authorization: Bearer {token}` unless noted.
 | `GET` | `/conversations/active` | List running conversation IDs |
 | `DELETE` | `/conversations/{id}` | Delete conversation |
 | `GET` | `/conversations/{id}/history` | Get message history |
-| `POST` | `/upload?conversation_id={id}` | Upload image |
+| `POST` | `/upload?conversation_id={id}` | Upload file (images + documents) |
+| `GET` | `/files?path={path}` | Serve image file |
 | `GET` | `/projects` | List available project directories |
+| `POST` | `/projects` | Create a new project |
+| `GET` | `/projects/files?path={path}` | Browse project files |
+| `GET` | `/projects/files/download?path={path}` | Download a project file |
+| `GET/PUT` | `/projects/config` | Get/set project custom instructions |
+| `POST` | `/preview/start` | Start a dev server |
+| `GET` | `/preview/status` | List active preview servers |
+| `GET/POST/PUT/DELETE` | `/mcp/servers` | Manage MCP servers |
+| `GET/POST/PUT/DELETE` | `/agents` | Manage agents |
 | `POST` | `/restart` | Gracefully restart server |
 
 See [docs/api.md](docs/api.md) for the full REST and WebSocket protocol reference.
@@ -129,7 +143,8 @@ All server data lives in `~/.conn/`:
 │   ├── server.crt        # EC P-256 certificate (PEM)
 │   └── server.key        # Private key (PEM, 0600 permissions)
 ├── history/              # Conversation history (JSONL per conversation)
-├── uploads/              # Uploaded images
+├── uploads/              # Uploaded files (images and documents)
+├── agents/               # Agent definitions (markdown with YAML frontmatter)
 ├── logs/                 # Server logs
 ├── releases/             # Optional: self-hosted app releases
 ├── worktrees/            # Git worktrees for conversations

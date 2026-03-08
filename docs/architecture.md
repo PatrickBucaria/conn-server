@@ -11,13 +11,18 @@ Conn server is a Python FastAPI application that bridges WebSocket clients to [C
 - **Per-Conversation Working Dir**: Each conversation stores an optional `working_dir` (set via project picker). The Claude subprocess runs in that directory, giving it the right project context (CLAUDE.md, git repo, etc.)
 - **Multi-Agent Concurrency**: Per-conversation asyncio locks allow multiple Claude processes to run simultaneously across different conversations. Each conversation has its own lock and process entry in `active_processes` dict. Sending a new message in a conversation only cancels that conversation's previous process, not others. The WebSocket handler dispatches message handlers as background tasks via `asyncio.create_task()` so the receive loop stays free for other conversations' messages and cancel requests
 - **WebSocket Keep-Alive**: Server sends `{"type": "ping"}` every 15 seconds after authentication. Client responds with `{"type": "pong"}`
-- **Allowed Tools**: Read, Write, Edit, Bash, Glob, Grep (max 50 turns)
+- **Allowed Tools**: Read, Write, Edit, Bash, Glob, Grep, WebSearch, WebFetch (max 200 turns)
 - **History Storage**: JSONL files per conversation, saved immediately for user messages, segmented by tool use for assistant messages
 
-## Image Handling
+## File Attachments
 
-- **User → Claude**: Images uploaded via `/upload` are saved to `~/.conn/uploads/{conversation_id}/`, prepended to prompt as `[The user attached an image. View it by reading this file: {path}]`
+- **Images** (jpg/png/gif/webp/heic/heif): Uploaded via `/upload`, saved to `~/.conn/uploads/{conversation_id}/`, prepended to prompt as `[The user attached an image. View it by reading this file: {path}]`
+- **Documents** (pdf/txt/md/csv/json/code files/office docs): Uploaded the same way, prepended as `[The user attached a file ({filename}). Read it: {path}]`
 - **Claude → User**: When Claude uses MCP screenshot tools, the `EventForwarder` detects the tool name and extracts the `filename` from the tool input. It emits an `{"type": "image", "path": "..."}` WebSocket event. The `/files` endpoint serves the image with auth via header or `?token=` query param
+
+## File Browser
+
+The `/projects/files` endpoint provides a file browser for navigating project directories. Files can be downloaded via `/projects/files/download`. Both endpoints enforce path traversal protection, restricting access to files under the configured projects root.
 
 ## Buffering and Limits
 
@@ -26,7 +31,23 @@ Conn server is a Python FastAPI application that bridges WebSocket clients to [C
 
 ## Conversation Summaries
 
-After the first Claude response in a new conversation, an async background task spawns `claude -p` (outside the conversation lock) to generate a short AI title (~50 chars). Updates the name via `sessions.rename_conversation()` and sends a `conversation_renamed` WebSocket event. Best-effort — falls back to raw first-message name on failure.
+After the first user message in a new conversation, an async background task spawns `claude -p` (outside the conversation lock) to generate a short AI title (~50 chars) immediately, without waiting for the response. Updates the name via `sessions.rename_conversation()` and sends a `conversation_renamed` WebSocket event. Best-effort — falls back to raw first-message name on failure.
+
+## Effort Level / Thinking
+
+Conversations can specify an `effort` level (`low`, `medium`, `high`) at creation time via the `new_conversation` WebSocket message. This maps directly to the Claude CLI's `--effort` flag, controlling how much computation Claude spends on its response.
+
+## Agent Support
+
+Conversations can be assigned a named agent via the `agent` field in `new_conversation`. In agent mode, the server passes `--agent {name}` to the Claude CLI, which uses the agent definition to configure tools, model, permissions, and MCP servers. The Conn platform rules (system prompt) are always appended via `--append-system-prompt`. Agents are managed via REST endpoints (`/agents`) and stored as markdown files with YAML frontmatter.
+
+## MCP Server Management
+
+MCP (Model Context Protocol) servers are configured via REST endpoints (`/mcp/servers`). The server maintains a catalog of pre-configured templates (`/mcp/catalog`) and writes per-conversation MCP config files to pass to the Claude CLI via `--mcp-config`. MCP tool names are auto-allowed using `mcp__{name}__*` wildcard patterns.
+
+## Tailscale Support
+
+The server auto-detects a Tailscale IP address (if available) and prefers it over the LAN IP for QR code generation. This enables remote access outside the home network without port forwarding. The Tailscale IP is shown in the startup banner, status output, and QR code payload.
 
 ## Web Preview
 
@@ -59,7 +80,8 @@ Server reads from `~/.conn/config.json`. Run `conn-server setup` to reconfigure,
 - Environment variable overrides: `CONN_WORKING_DIR`, `CONN_PORT`, `CONN_HOST` (take precedence over config file)
 - Conversation history: `~/.conn/history/{conversation_id}.jsonl`
 - Session tracking: `~/.conn/sessions.json`
-- Image uploads: `~/.conn/uploads/{conversation_id}/`
+- File uploads: `~/.conn/uploads/{conversation_id}/`
+- Agent definitions: `~/.conn/agents/{name}.md`
 - App releases: `~/.conn/releases/`
 - launchd service: `~/Library/LaunchAgents/com.conn.server.plist` (macOS, installed by `conn-server start` or `setup.sh`)
 - systemd service: `/etc/systemd/system/conn.service` (Linux, installed by `conn-server start` or `setup.sh`)
