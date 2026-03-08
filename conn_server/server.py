@@ -1103,9 +1103,10 @@ async def _handle_new_conversation(websocket: WebSocket, msg: dict):
     mcp_server_names = msg.get("mcp_servers")
     model = msg.get("model")
     agent = msg.get("agent")
+    effort = msg.get("effort")
 
     try:
-        conv = sessions.create_conversation(conversation_id, name, working_dir=working_dir, allowed_tools=allowed_tools, mcp_servers=mcp_server_names, model=model, agent=agent)
+        conv = sessions.create_conversation(conversation_id, name, working_dir=working_dir, allowed_tools=allowed_tools, mcp_servers=mcp_server_names, model=model, agent=agent, effort=effort)
     except ValueError as e:
         await _send(websocket, {"type": "error", "detail": str(e)})
         return
@@ -1319,6 +1320,10 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
     # agent mode gets model from the agent definition)
     if not use_agent and conv and conv.model:
         cmd.extend(["--model", conv.model])
+
+    # Add --effort flag if conversation specifies an effort level
+    if conv and conv.effort and conv.effort in ("low", "medium", "high"):
+        cmd.extend(["--effort", conv.effort])
 
     # Generate --mcp-config file if conversation has MCP servers enabled
     # (manual mode only; agent mode gets MCP from the agent definition)
