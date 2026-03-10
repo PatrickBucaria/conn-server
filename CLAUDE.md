@@ -46,20 +46,17 @@ pytest -k "test_create"                      # Pattern match
 ## Project Structure
 
 ```
-├── conn_server/           # Python package (installed as conn-server on PyPI)
-│   ├── __init__.py        # Package version
-│   ├── cli.py             # CLI entry point (conn-server command)
-│   ├── server.py          # Main app, WebSocket + REST endpoints
-│   ├── session_manager.py # Conversation tracking, JSONL history
-│   ├── config.py          # Config management (~/.conn/config.json)
-│   ├── tls.py             # EC P-256 cert generation, fingerprint, DER export
-│   ├── auth.py            # Bearer token verification
-│   ├── agent_manager.py   # Agent CRUD and frontmatter parsing
-│   ├── mcp_config.py      # MCP server configuration
-│   ├── mcp_catalog.py     # MCP server catalog (available integrations)
-│   ├── preview_manager.py # Background dev server management
-│   ├── project_config.py  # Per-project custom instructions
-│   └── git_utils.py       # Git utilities (worktrees, branch detection)
+├── server.py              # Main app, WebSocket + REST endpoints
+├── session_manager.py     # Conversation tracking, JSONL history
+├── config.py              # Config management (~/.conn/config.json)
+├── tls.py                 # EC P-256 cert generation, fingerprint, DER export
+├── auth.py                # Bearer token verification
+├── agent_manager.py       # Agent CRUD and frontmatter parsing
+├── mcp_config.py          # MCP server configuration
+├── mcp_catalog.py         # MCP server catalog (available integrations)
+├── preview_manager.py     # Background dev server management
+├── project_config.py      # Per-project custom instructions
+├── git_utils.py           # Git utilities (worktrees, branch detection)
 ├── requirements.txt       # Python dependencies
 ├── pyproject.toml         # Project metadata + tool config
 ├── setup.sh               # Interactive setup (venv, config, service)
@@ -81,13 +78,10 @@ pytest -k "test_create"                      # Pattern match
 
 ## Key Files
 
-All source files are in the `conn_server/` package.
-
 | File | Purpose |
 |------|---------|
-| `cli.py` | CLI entry point (`conn-server` command, setup, service management) |
 | `server.py` | Main FastAPI app, WebSocket + REST endpoints |
-| `config.py` | Reads `~/.conn/config.json`, env var overrides, Tailscale IP detection |
+| `config.py` | Reads `~/.conn/config.json`, env var overrides |
 | `tls.py` | EC P-256 cert generation, fingerprint, DER export for QR codes |
 | `auth.py` | Bearer token verification |
 | `session_manager.py` | Conversation tracking, JSONL history |
@@ -104,8 +98,6 @@ All source files are in the `conn_server/` package.
 2. **Concurrent messages**: Server uses per-conversation locks. If a lock doesn't release within 5s, a `busy` event is returned
 3. **WebSocket auth**: First message must be `{"type": "auth", "token": "..."}` or connection is rejected
 4. **Stream-json event format varies**: Claude CLI with `-p` emits complete `assistant` events, NOT streaming `content_block_start`/`content_block_delta`/`content_block_stop` events. The `EventForwarder` handles both paths
-11. **Allowed tools**: Default tools are Read, Write, Edit, Bash, Glob, Grep, WebSearch, WebFetch. Per-conversation overrides via `allowed_tools`. Max turns is 200
-12. **Effort levels**: Conversations can set `effort` (`low`/`medium`/`high`) at creation time, passed as `--effort` to the Claude CLI
 5. **MCP tool auto-allow**: MCP tools must be included in `--allowedTools` or the CLI will prompt (hanging the subprocess). The server auto-appends `mcp__<name>__*` wildcard patterns
 6. **Image Read tool results**: Claude's stream-json can emit multi-MB lines. Stdout buffer is set to 32MB
 7. **Never run dev servers via Bash tool**: Long-lived processes hang the conversation lock. Use `PreviewManager` instead

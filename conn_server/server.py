@@ -1449,13 +1449,25 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
 
         logger.info(f"claude process exited with code {process.returncode}")
 
-        # If --resume failed with an invalid session, clear it and retry without resume
-        if result_is_error and session_id and not accumulated_text:
-            logger.info(f"Resume failed for {conversation_id} — clearing session and retrying")
-            sessions.update_session_id(conversation_id, None)
-            await _send_to_client({"type": "error", "detail": "Session expired, retrying..."})
-            # Retry without --resume (recursive call with session_id=None)
-            await _run_claude(websocket, text, conversation_id, session_id=None, is_first_turn=True, cwd=cwd)
+        # If the Claude process errored, send the error to the client but
+        # preserve the session_id so the next message still uses --resume.
+        # Never silently start a fresh session — that loses all conversation
+        # context.  The user can retry (which will --resume again) or create
+        # a new conversation if the session is truly dead.
+        if result_is_error and not accumulated_text:
+            error_detail = "Message failed — tap to retry"
+            logger.warning(f"claude error for {conversation_id} (session_id={session_id}): {error_detail}")
+            await _send_to_client({
+                "type": "error",
+                "detail": error_detail,
+                "conversation_id": conversation_id,
+            })
+            # Still send message_complete so the client clears streaming state
+            await _send_to_client({
+                "type": "message_complete",
+                "conversation_id": conversation_id,
+                "session_id": session_id,
+            })
             return
 
         # Update session tracking
