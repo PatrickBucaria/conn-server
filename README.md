@@ -10,10 +10,13 @@ A self-hosted server that lets you interact with [Claude Code](https://docs.anth
 - **Multiple concurrent conversations** — each with its own Claude process and working directory
 - **Session resume** — conversations persist across reconnects
 - **Project context** — point each conversation at a different project directory
-- **MCP integration** — configure Model Context Protocol servers for extended tool access
+- **File browser** — browse and download files from project directories
+- **MCP integration** — configure Model Context Protocol servers from a built-in catalog
+- **Custom agents** — define reusable agent profiles with custom prompts, models, and tool sets
 - **Web preview** — auto-detect and serve dev servers for web projects
 - **Built-in TLS** — auto-generated EC P-256 self-signed certificate with cert pinning (no CA needed)
-- **Self-hosted updates** — optionally serve app releases from the server
+- **Self-hosted updates** — serve app releases from the server, with deploy trigger via API
+- **Git worktree isolation** — multiple conversations in the same repo get isolated worktrees
 
 ## Requirements
 
@@ -90,6 +93,8 @@ Environment variables override the config file:
 
 All endpoints require `Authorization: Bearer {token}` unless noted.
 
+### Core
+
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/health` | Health check (no auth) |
@@ -97,9 +102,66 @@ All endpoints require `Authorization: Bearer {token}` unless noted.
 | `GET` | `/conversations/active` | List running conversation IDs |
 | `DELETE` | `/conversations/{id}` | Delete conversation |
 | `GET` | `/conversations/{id}/history` | Get message history |
-| `POST` | `/upload?conversation_id={id}` | Upload image |
-| `GET` | `/projects` | List available project directories |
+| `POST` | `/upload?conversation_id={id}` | Upload image (multipart, max 20MB) |
+| `GET` | `/files?path={path}` | Serve image file |
+| `POST` | `/send-image` | Inject an image into a conversation stream |
 | `POST` | `/restart` | Gracefully restart server |
+
+### Projects & Files
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/projects` | List available project directories |
+| `POST` | `/projects` | Create a new project directory |
+| `GET` | `/projects/files?path={path}` | List files in a project directory |
+| `GET` | `/projects/files/download?path={path}` | Download a project file |
+| `GET` | `/projects/config?path={path}` | Get per-project custom instructions |
+| `PUT` | `/projects/config` | Update per-project custom instructions |
+
+### Web Preview
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/preview/check/{conversation_id}` | Check if conversation dir is previewable |
+| `GET` | `/preview/check-project?path={path}` | Check if a directory is previewable |
+| `POST` | `/preview/start` | Start a dev server for a conversation |
+| `POST` | `/preview/start-project` | Start a dev server by directory path |
+| `POST` | `/preview/restart` | Restart a preview server |
+| `POST` | `/preview/stop` | Stop a conversation's preview server |
+| `POST` | `/preview/stop-project` | Stop a preview by directory |
+| `GET` | `/preview/status` | List all active preview servers |
+
+### MCP Servers
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/mcp/servers` | List configured MCP servers |
+| `POST` | `/mcp/servers` | Add an MCP server |
+| `PUT` | `/mcp/servers/{name}` | Update an MCP server |
+| `DELETE` | `/mcp/servers/{name}` | Delete an MCP server |
+| `POST` | `/mcp/servers/{name}/toggle` | Enable/disable an MCP server |
+| `GET` | `/mcp/catalog` | Browse the built-in MCP catalog |
+
+### Agents
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/agents` | List all agents |
+| `GET` | `/agents/{name}` | Get agent details |
+| `POST` | `/agents` | Create an agent |
+| `PUT` | `/agents/{name}` | Update an agent |
+| `DELETE` | `/agents/{name}` | Delete an agent |
+
+### Updates & Deploy
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/update/check` | Check for app update |
+| `GET` | `/update/releases` | List available builds |
+| `GET` | `/update/download` | Download latest APK |
+| `GET` | `/update/download/{filename}` | Download specific APK |
+| `POST` | `/deploy` | Trigger build and deploy |
+| `GET` | `/deploy/status` | Check deploy status |
 
 See [docs/api.md](docs/api.md) for the full REST and WebSocket protocol reference.
 

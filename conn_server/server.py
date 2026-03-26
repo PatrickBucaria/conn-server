@@ -7,6 +7,7 @@ import logging
 import os
 import shutil
 import signal
+import sys
 import time
 import typing
 import uuid
@@ -43,6 +44,13 @@ agents = AgentManager()
 # Track connected WebSocket clients for broadcasting events
 connected_clients: list[WebSocket] = []
 
+# Printer pipeline (optional — only available when the printer package is installed)
+try:
+    from .printer_router import router as printer_router
+    _printer_available = True
+except ImportError:
+    _printer_available = False
+
 
 def _get_conversation_lock(conversation_id: str) -> asyncio.Lock:
     """Get or create a per-conversation lock."""
@@ -62,6 +70,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+if _printer_available:
+    app.include_router(printer_router)
 
 
 # ---------- REST endpoints ----------
@@ -895,6 +906,8 @@ async def delete_agent(name: str, authorization: str = Header(None)):
         logger.info(f"Deleted agent: {name}")
         return {"deleted": name}
     raise HTTPException(status_code=404, detail="Agent not found")
+
+
 
 
 def _verify_rest_auth(authorization: str | None):

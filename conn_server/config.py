@@ -22,6 +22,7 @@ LOG_DIR = CONFIG_DIR / "logs"
 UPLOADS_DIR = CONFIG_DIR / "uploads"
 WORKTREES_DIR = CONFIG_DIR / "worktrees"
 RELEASES_DIR = CONFIG_DIR / "releases"
+PRINTER_RUNS_DIR = CONFIG_DIR / "printer" / "runs"
 PROJECTS_CONFIG_DIR = CONFIG_DIR / "projects"
 
 DEFAULT_PORT = 8443
