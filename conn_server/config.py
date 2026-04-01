@@ -131,6 +131,61 @@ def get_working_dir() -> str:
     return os.environ.get("CONN_WORKING_DIR") or load_config().get("working_dir", WORKING_DIR)
 
 
+def get_machine_name() -> str:
+    """Return a human-readable machine identifier.
+
+    Priority: config machine_name > auto-detected hostname + hardware.
+    Users can set "machine_name" in ~/.conn/config.json for a friendly name
+    like "MacBook Pro M3 Max" or "Mac Mini M2".
+    """
+    config = load_config()
+    custom = config.get("machine_name")
+    if custom:
+        return custom
+    import platform
+    hostname = socket.gethostname().replace(".local", "")
+    arch = platform.machine()
+    return f"{hostname} ({platform.system()}, {arch})"
+
+
+def get_local_model_config() -> dict | None:
+    """Return local model config if enabled, else None.
+
+    Config example in ~/.conn/config.json:
+        "local_model": {
+            "enabled": true,
+            "opencode_path": "/path/to/opencode",  // optional, default: "opencode"
+            "timeout": 120                          // optional, default: 120
+        }
+    """
+    config = load_config()
+    lm = config.get("local_model")
+    if not lm or not lm.get("enabled"):
+        return None
+    return lm
+
+
+def get_local_model_status() -> dict:
+    """Return local model availability and enabled status."""
+    config = load_config()
+    lm = config.get("local_model")
+    if not lm:
+        return {"available": False, "enabled": False}
+    return {"available": True, "enabled": bool(lm.get("enabled", False))}
+
+
+def set_local_model_enabled(enabled: bool):
+    """Toggle the local_model.enabled flag in config."""
+    config = load_config()
+    config.pop("_is_first_run", None)
+    lm = config.get("local_model", {})
+    lm["enabled"] = enabled
+    config["local_model"] = lm
+    tmp_path = CONFIG_FILE.with_suffix(".json.tmp")
+    _write_private_file(tmp_path, json.dumps(config, indent=2))
+    tmp_path.rename(CONFIG_FILE)
+
+
 def _print_qr_code(host: str, port: int, token: str, cert_der_b64: str | None = None):
     """Print a QR code to the terminal containing connection details."""
     try:

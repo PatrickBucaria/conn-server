@@ -7,6 +7,7 @@ import logging
 import os
 import shutil
 import signal
+import subprocess
 import sys
 import time
 import typing
@@ -43,6 +44,26 @@ agents = AgentManager()
 
 # Track connected WebSocket clients for broadcasting events
 connected_clients: list[WebSocket] = []
+# Server name provided by each client during auth (e.g. "MacBook Pro")
+client_server_names: dict[int, str] = {}  # id(websocket) -> server_name
+# Client app version — persisted to disk so it survives server restarts
+_CLIENT_VERSION_FILE = Path.home() / ".conn" / "client_version.json"
+
+def _load_client_version() -> dict[str, int | str]:
+    try:
+        return json.loads(_CLIENT_VERSION_FILE.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+def _save_client_version(version: dict):
+    try:
+        from .config import _write_private_file, _ensure_dirs
+        _ensure_dirs()
+        _write_private_file(_CLIENT_VERSION_FILE, json.dumps(version))
+    except OSError:
+        logger.warning("Failed to persist client version to disk")
+
+client_app_version: dict[str, int | str] = _load_client_version()
 
 # Printer pipeline (optional — only available when the printer package is installed)
 try:
@@ -83,6 +104,15 @@ async def health():
         "status": "ok",
         "uptime_seconds": int(time.time() - start_time),
     }
+
+
+@app.get("/client/version")
+async def get_client_version(authorization: str = Header(None)):
+    """Return the app version reported by the most recently connected client."""
+    _verify_rest_auth(authorization)
+    if not client_app_version:
+        raise HTTPException(status_code=404, detail="No client has connected yet")
+    return client_app_version
 
 
 @app.get("/conversations")
@@ -139,6 +169,9 @@ ALLOWED_DOCUMENT_EXTENSIONS = {
     ".sql", ".r", ".go", ".rs", ".rb", ".php", ".css", ".scss",
     ".ini", ".cfg", ".conf", ".properties",
     ".doc", ".docx", ".xls", ".xlsx", ".pptx", ".rtf",
+    ".keystore", ".jks", ".pem", ".crt", ".key", ".p12", ".pfx",
+    ".zip", ".tar", ".gz", ".bz2", ".xz",
+    ".bin", ".dat", ".db", ".sqlite",
 }
 ALLOWED_UPLOAD_EXTENSIONS = ALLOWED_IMAGE_EXTENSIONS | ALLOWED_DOCUMENT_EXTENSIONS
 MAX_UPLOAD_SIZE = 20 * 1024 * 1024  # 20MB
@@ -325,7 +358,15 @@ async def create_project(request: CreateProjectRequest, authorization: str = Hea
         raise HTTPException(status_code=409, detail="Project already exists")
 
     new_project.mkdir(parents=True)
-    logger.info(f"Created project directory: {new_project}")
+
+    # Initialize a git repo so Claude CLI has a stable project root.
+    # Without this, the CLI resolves the project root inconsistently
+    # between calls, which breaks --resume (session not found).
+    try:
+        subprocess.run(["git", "init"], cwd=str(new_project), capture_output=True, check=True)
+        logger.info(f"Created project directory with git: {new_project}")
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        logger.warning(f"Created project directory (git init failed): {new_project}")
 
     return {"name": name, "path": str(new_project)}
 
@@ -407,6 +448,31 @@ async def update_project_config(request: UpdateProjectConfigRequest, authorizati
     _verify_rest_auth(authorization)
     set_custom_instructions(request.path, request.custom_instructions)
     return get_project_config(request.path)
+
+
+# ---------- Local model config endpoints ----------
+
+
+class LocalModelToggleRequest(BaseModel):
+    enabled: bool
+
+
+@app.get("/config/local-model")
+async def get_local_model_status_endpoint(authorization: str = Header(None)):
+    """Return local model availability and enabled status."""
+    _verify_rest_auth(authorization)
+    from .config import get_local_model_status
+    return get_local_model_status()
+
+
+@app.post("/config/local-model")
+async def set_local_model_enabled_endpoint(request: LocalModelToggleRequest, authorization: str = Header(None)):
+    """Toggle local model delegation on or off."""
+    _verify_rest_auth(authorization)
+    from .config import set_local_model_enabled
+    set_local_model_enabled(request.enabled)
+    from .config import get_local_model_status
+    return get_local_model_status()
 
 
 @app.post("/restart")
@@ -958,9 +1024,18 @@ async def ws_chat(websocket: WebSocket):
                 if verify_token(msg.get("token", "")):
                     authenticated = True
                     connected_clients.append(websocket)
+                    server_name = msg.get("server_name", "")
+                    if server_name:
+                        client_server_names[id(websocket)] = server_name
+                    app_version_code = msg.get("app_version_code")
+                    app_version_name = msg.get("app_version_name", "")
+                    if app_version_code is not None:
+                        client_app_version["code"] = int(app_version_code)
+                        client_app_version["name"] = app_version_name
+                        _save_client_version(client_app_version)
                     await _send(websocket, {"type": "auth_ok"})
                     ping_task = asyncio.create_task(_ping_loop())
-                    logger.info("Client authenticated")
+                    logger.info(f"Client authenticated (server_name={server_name or 'unset'}, app_version={app_version_code or 'unset'})")
                 else:
                     await _send(websocket, {"type": "error", "detail": "Invalid token"})
                     await websocket.close(code=4001, reason="Invalid token")
@@ -1000,6 +1075,7 @@ async def ws_chat(websocket: WebSocket):
             ping_task.cancel()
         if websocket in connected_clients:
             connected_clients.remove(websocket)
+        client_server_names.pop(id(websocket), None)
 
 
 def _build_prompt(text: str, image_paths: list[str]) -> str:
@@ -1264,11 +1340,16 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
     use_agent = conv and conv.agent
 
     # Conn-specific platform rules (appended regardless of agent)
+    server_name = client_server_names.get(id(websocket), "")
+    if not server_name:
+        from .config import get_machine_name
+        server_name = get_machine_name()
     conn_system_prompt = (
         "The user is communicating with you remotely via Conn, "
         "an Android app that connects to this machine over the local network. "
         "They cannot see your full terminal output or interact with files directly. "
         "Keep responses concise and focused on actionable results.\n\n"
+        f"MACHINE: {server_name}\n\n"
         "WEB APP PREVIEW — CRITICAL RULES:\n"
         "1. NEVER start long-running dev servers via the Bash tool. "
         "Running 'npm run dev', 'python -m http.server', 'flask run', 'npx vite', "
@@ -1295,6 +1376,39 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
         "updated to stay consistent with the changes you made. If you find stale or "
         "missing documentation, update it as part of the same task."
     )
+
+    # Append local model delegation instructions if configured
+    from .config import get_local_model_config
+    lm_config = get_local_model_config()
+    if lm_config:
+        opencode_bin = lm_config.get("opencode_path", "opencode")
+        lm_timeout = lm_config.get("timeout", 120)
+        conn_system_prompt += (
+            "\n\nLOCAL MODEL DELEGATION:\n"
+            "This machine has a fast local coding LLM available via OpenCode — "
+            "80B parameter model running at 70+ tokens/sec on local hardware. "
+            "It is a capable coding model that can handle substantial tasks. "
+            "Delegate to it by running:\n"
+            f"  {opencode_bin} run --format json '<prompt>'\n\n"
+            "Good for: writing tests, generating boilerplate, refactoring files, "
+            "mechanical transforms, documentation, code review, and any self-contained "
+            "coding task that doesn't need your conversation context.\n"
+            "Do NOT delegate: tasks requiring multi-file coordination across many files, "
+            "or tasks that depend on context from this conversation (the local model "
+            "starts fresh each call with no history).\n\n"
+            "Rules:\n"
+            "- Include ALL necessary context in the prompt (file contents, specs, etc.)\n"
+            "- Only run ONE call at a time — wait for it to finish before the next\n"
+            f"- Timeout: {lm_timeout}s\n"
+            "- The local model can read/write files in the working directory\n"
+            "- Parse the JSON output: look for 'message.completed' events with 'text' parts for the result\n\n"
+            "MANDATORY — CODE REVIEW BEFORE COMMIT:\n"
+            "Before committing or presenting final code changes to the user, ALWAYS "
+            "request a code review from the local model. Send it the diff or changed "
+            "files and ask it to check for: bugs, stale references, missing edge cases, "
+            "and style issues. Address any valid findings before proceeding. "
+            "This is a free, zero-cost quality gate — use it every time."
+        )
 
     # Append per-project custom instructions if configured
     project_dir = cwd or get_working_dir()
@@ -1362,6 +1476,7 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
     accumulated_text = ""
     in_tool_use = False  # Track when we're inside a tool use block
     result_is_error = False
+    result_errors: list[str] = []
     saw_streaming_deltas = False  # Track if we got content_block_delta events
     forwarder = EventForwarder(cwd=cwd or get_working_dir())
 
@@ -1437,8 +1552,8 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
             if event.get("type") == "result":
                 result_is_error = event.get("is_error", False)
                 if result_is_error:
-                    errors = event.get("errors", [])
-                    logger.warning(f"claude result error: {errors}")
+                    result_errors = event.get("errors", [])
+                    logger.warning(f"claude result error: {result_errors}")
                     # Don't store session IDs from failed results — they may be
                     # invalid and would poison future --resume attempts.
                 else:
@@ -1462,12 +1577,37 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
 
         logger.info(f"claude process exited with code {process.returncode}")
 
-        # If the Claude process errored, send the error to the client but
-        # preserve the session_id so the next message still uses --resume.
-        # Never silently start a fresh session — that loses all conversation
-        # context.  The user can retry (which will --resume again) or create
-        # a new conversation if the session is truly dead.
+        # If the Claude process errored, check if the session is permanently
+        # dead (e.g. expired or deleted).  In that case, clear the stored
+        # session_id and auto-retry with conversation history as context.
         if result_is_error and not accumulated_text:
+            session_dead = any(
+                "no conversation found" in str(e).lower()
+                for e in result_errors
+            )
+            if session_dead and conversation_id:
+                logger.info(f"Dead session for {conversation_id} (was {session_id}) — retrying with history context")
+                sessions.update_session_id(conversation_id, "")
+                # Retry: rebuild prompt with conversation history for context
+                history = sessions.get_history(conversation_id)
+                # Exclude the current user message (last entry) since it's already in `text`
+                prior = [h for h in history[:-1] if h.get("role") in ("user", "assistant")]
+                if prior:
+                    replay_lines = []
+                    for h in prior:
+                        role_label = "User" if h["role"] == "user" else "Assistant"
+                        replay_lines.append(f"[{role_label}]: {h['text']}")
+                    history_block = "\n\n".join(replay_lines)
+                    text = (
+                        "[CONTEXT: This conversation's session expired. "
+                        "Here is the prior conversation history for continuity.]\n\n"
+                        f"{history_block}\n\n"
+                        f"[User]: {text}"
+                    )
+                await _run_claude(websocket, text, conversation_id, session_id=None,
+                                  is_first_turn=True, cwd=cwd)
+                return
+
             error_detail = "Message failed — tap to retry"
             logger.warning(f"claude error for {conversation_id} (session_id={session_id}): {error_detail}")
             await _send_to_client({
@@ -1515,7 +1655,8 @@ async def _run_claude(websocket: WebSocket, text: str, conversation_id: str, ses
 
     except Exception as e:
         logger.exception(f"claude subprocess error: {e}")
-        await _send_to_client({"type": "error", "detail": str(e)})
+        await _send_to_client({"type": "error", "detail": str(e), "conversation_id": conversation_id})
+        await _send_to_client({"type": "message_complete", "conversation_id": conversation_id, "session_id": session_id})
     finally:
         active_processes.pop(conversation_id, None)
         # Clean up temp MCP config file

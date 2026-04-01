@@ -500,6 +500,118 @@ class TestActiveConversationsEndpoint:
         assert response.status_code == 401
 
 
+class TestClientVersionEndpoint:
+    @pytest.mark.asyncio
+    async def test_no_client_connected(self, test_client, headers):
+        from conn_server.server import client_app_version
+        saved = dict(client_app_version)
+        client_app_version.clear()
+        try:
+            async with test_client as client:
+                response = await client.get("/client/version", headers=headers)
+            assert response.status_code == 404
+        finally:
+            client_app_version.update(saved)
+
+    @pytest.mark.asyncio
+    async def test_requires_auth(self, test_client):
+        async with test_client as client:
+            response = await client.get("/client/version")
+        assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_returns_version_after_set(self, test_client, headers):
+        """Simulate client version being set (normally done via WebSocket auth)."""
+        from conn_server.server import client_app_version
+        client_app_version["code"] = 205
+        client_app_version["name"] = "0.0.205"
+        try:
+            async with test_client as client:
+                response = await client.get("/client/version", headers=headers)
+            assert response.status_code == 200
+            data = response.json()
+            assert data["code"] == 205
+            assert data["name"] == "0.0.205"
+        finally:
+            client_app_version.clear()
+
+
+class TestLocalModelEndpoint:
+    @pytest.mark.asyncio
+    async def test_get_not_configured(self, test_client, headers):
+        async with test_client as client:
+            response = await client.get("/config/local-model", headers=headers)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["available"] is False
+        assert data["enabled"] is False
+
+    @pytest.mark.asyncio
+    async def test_get_configured_enabled(self, test_client, headers, tmp_config_dir):
+        config_file = tmp_config_dir["config_file"]
+        config = json.loads(config_file.read_text())
+        config["local_model"] = {"enabled": True, "opencode_path": "/usr/local/bin/opencode"}
+        config_file.write_text(json.dumps(config))
+
+        async with test_client as client:
+            response = await client.get("/config/local-model", headers=headers)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["available"] is True
+        assert data["enabled"] is True
+
+    @pytest.mark.asyncio
+    async def test_toggle_on(self, test_client, headers, tmp_config_dir):
+        config_file = tmp_config_dir["config_file"]
+        config = json.loads(config_file.read_text())
+        config["local_model"] = {"enabled": False, "opencode_path": "/usr/local/bin/opencode"}
+        config_file.write_text(json.dumps(config))
+
+        async with test_client as client:
+            response = await client.post("/config/local-model", headers=headers, json={"enabled": True})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["enabled"] is True
+        assert data["available"] is True
+
+        # Verify persisted
+        persisted = json.loads(config_file.read_text())
+        assert persisted["local_model"]["enabled"] is True
+
+    @pytest.mark.asyncio
+    async def test_toggle_off(self, test_client, headers, tmp_config_dir):
+        config_file = tmp_config_dir["config_file"]
+        config = json.loads(config_file.read_text())
+        config["local_model"] = {"enabled": True, "opencode_path": "/usr/local/bin/opencode"}
+        config_file.write_text(json.dumps(config))
+
+        async with test_client as client:
+            response = await client.post("/config/local-model", headers=headers, json={"enabled": False})
+        assert response.status_code == 200
+        assert response.json()["enabled"] is False
+
+    @pytest.mark.asyncio
+    async def test_toggle_creates_local_model_key(self, test_client, headers, tmp_config_dir):
+        """Toggling on a machine with no local_model key should create it."""
+        async with test_client as client:
+            response = await client.post("/config/local-model", headers=headers, json={"enabled": True})
+        assert response.status_code == 200
+        assert response.json()["enabled"] is True
+        assert response.json()["available"] is True
+
+    @pytest.mark.asyncio
+    async def test_requires_auth(self, test_client):
+        async with test_client as client:
+            response = await client.get("/config/local-model")
+        assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_post_requires_auth(self, test_client):
+        async with test_client as client:
+            response = await client.post("/config/local-model", json={"enabled": True})
+        assert response.status_code == 401
+
+
 class TestRestartEndpoint:
     @pytest.mark.asyncio
     async def test_restart_requires_auth(self, test_client):
